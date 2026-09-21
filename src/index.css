@@ -1,0 +1,167 @@
+@import 'tailwindcss';
+
+/* ---------------------------------------------------------------
+   CycloVision design tokens — dark mission-control theme.
+   Use ONLY these colour tokens (bg-base, bg-panel, border-line,
+   text-primary, text-accent, text-amber, text-red, text-green,
+   text-ink, text-muted) so every screen stays consistent.
+   --------------------------------------------------------------- */
+@theme {
+  --color-base: #0a101c;
+  --color-panel: #111a2b;
+  --color-line: #1f2b42;
+  --color-primary: #1e90ff;
+  --color-accent: #22d3ee;
+  --color-amber: #f59e0b;
+  --color-red: #ef4444;
+  --color-green: #22c55e;
+
+  /* Text colours (not in the brief's palette; needed for legibility). */
+  --color-ink: #e6edf7;
+  --color-muted: #8494b0;
+
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, 'Cascadia Code', monospace;
+
+  /* Every rotation in the app is counter-clockwise (northern-hemisphere cyclone). Never use animate-spin. */
+  --animate-spin-ccw: spin-ccw 1s linear infinite;
+  /* Slow radar sweep over the monitoring area: one counter-clockwise turn every 12 seconds. */
+  --animate-sweep-ccw: spin-ccw 12s linear infinite;
+
+  /* Calm expanding ring for the detection marker: slow, fades out, never flashes. */
+  --animate-pulse-ring: pulse-ring 2.8s ease-out infinite;
+
+  @keyframes spin-ccw {
+    to {
+      transform: rotate(-360deg);
+    }
+  }
+
+  @keyframes pulse-ring {
+    0% {
+      transform: scale(0.3);
+      opacity: 0.75;
+    }
+    100% {
+      transform: scale(1.7);
+      opacity: 0;
+    }
+  }
+}
+
+/*
+ * `short:` applies on windows up to 820 px tall (small laptops, 1366x768 and 1280x720 full screen, and browser
+ * windows on 1440x900 screens): tighter spacing so a stage never needs scrolling.
+ */
+@custom-variant short (@media (max-height: 820px));
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-base font-sans text-ink antialiased;
+    min-height: 100vh;
+  }
+
+  *,
+  ::before,
+  ::after {
+    border-color: var(--color-line);
+  }
+
+  /* Numbers everywhere should line up like instrument readouts. */
+  .num {
+    @apply font-mono tabular-nums;
+  }
+}
+
+/* Subtle glow for the main call-to-action button. */
+@keyframes glow-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgb(30 144 255 / 0.55),
+      0 0 18px 0 rgb(30 144 255 / 0.3),
+      inset 0 1px 0 rgb(255 255 255 / 0.16);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px rgb(34 211 238 / 0.65),
+      0 0 32px 2px rgb(30 144 255 / 0.45),
+      inset 0 1px 0 rgb(255 255 255 / 0.2);
+  }
+}
+
+@utility btn-glow {
+  background-image: linear-gradient(180deg, #2f9bff 0%, #1e90ff 55%, #1a7fe0 100%);
+  color: #fff;
+  animation: glow-pulse 2.8s ease-in-out infinite;
+  transition:
+    transform 150ms ease,
+    filter 150ms ease;
+
+  &:hover {
+    filter: brightness(1.1);
+    transform: translateY(-1px);
+  }
+
+  &:active {
+    transform: translateY(0);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 3px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+    box-shadow:
+      0 0 0 1px rgb(30 144 255 / 0.55),
+      0 0 18px 0 rgb(30 144 255 / 0.3);
+  }
+}
+
+/* Glow for the current step in the progress tracker. */
+@keyframes step-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgb(30 144 255 / 0.5),
+      0 0 12px 0 rgb(30 144 255 / 0.35);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px rgb(34 211 238 / 0.7),
+      0 0 22px 2px rgb(30 144 255 / 0.55);
+  }
+}
+
+@utility step-glow {
+  animation: step-glow 2.4s ease-in-out infinite;
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+    box-shadow:
+      0 0 0 1px rgb(30 144 255 / 0.5),
+      0 0 14px 0 rgb(30 144 255 / 0.4);
+  }
+}
+
+/* Leaflet, dark. The dark background also shows through wherever a tile fails to load. */
+.leaflet-container {
+  background: var(--color-base);
+  font-family: inherit;
+}
+
+.leaflet-container .leaflet-control-attribution {
+  background: rgb(10 16 28 / 0.7);
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.leaflet-container .leaflet-control-attribution a {
+  color: var(--color-accent);
+}
