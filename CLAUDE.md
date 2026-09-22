@@ -22,17 +22,20 @@ The whole app is **ONE screen and ONE story**.
 **Initial screen:** CycloVision logo and name, tagline, a large satellite/earth monitoring-area visual,
 and one button: `[ Simulate Cyclone ]`.
 
-After the click, the story plays automatically, with no manual navigation:
+After the click, the story plays stage by stage. **Nothing auto-advances (Phase 10):** each stage below plays
+its own animation through to the end and then shows a `[ Continue to <next stage> ]` button; the story moves on
+only when that is clicked.
 
 1. **Detect:** "Receiving multi-source satellite observations..." then IR, Water Vapor, Microwave, SST
-   each get a tick. Then "Cyclone-like system detected".
+   each get a tick. Then "Cyclone-like system detected", then `[ Continue to Identification ]`.
 2. **Identify:** the satellite image zooms into the storm. "IDENTIFYING CYCLONE". Shows detected center,
-   coordinates, movement, confidence, an AI analysis overlay. Then "Cyclone center identified".
+   coordinates, movement, confidence, an AI analysis overlay. Then "Cyclone center identified", then
+   `[ Continue to Classification ]`.
 3. **Classify:** "CLASSIFYING STORM STRUCTURE". Storm image with a Dvorak-aligned structural overlay.
-   Then "Structure classified" and "Dvorak-aligned assessment available".
+   Then "Structure classified" and "Dvorak-aligned assessment available", then `[ Continue to Prediction ]`.
 4. **Predict RI:** "PREDICTING RAPID INTENSIFICATION". An animated 12-24h probability chart is generated
    (the big reveal). Then "RI assessment generated" with the 12-24h forecast window, probability spread,
-   and uncertainty band.
+   and uncertainty band, then `[ Continue to Result ]`.
    - *Decision:* the chart plots the **30 intensity paths** with the **10-90% band**, the **median path**
      and a **dashed +30 kt RI line**. The **12h and 24h probabilities** are number callouts next to the
      chart, computed from how many paths cross the threshold. Do **not** build a separate
@@ -45,6 +48,13 @@ After the click, the story plays automatically, with no manual navigation:
 
 Controls for retakes (Phase 9): a small `Replay` button in the top bar, only on the Result and Explain screens, goes
 back to the initial screen with a clean slate.
+
+**The progress tracker is clickable (Phase 11):** on Detect, Identify, Classify and Predict RI, clicking an
+already-finished step jumps back to it and shows its finished result exactly as it looked when it completed —
+never replayed. Clicking a step not reached yet shows a "Not processed yet" tooltip and does not navigate. The
+Continue button on a revisited step still works, and moving forward again through already-finished territory
+shows each one's real result too, never regenerated. Result stays exactly as it was: not a tracker button,
+reachable only via Predict RI's Continue.
 
 Video narrative: *"Let's simulate a cyclone and see how CycloVision responds."*
 
@@ -84,16 +94,17 @@ src/
                 StormMapOverlays (swirl + detection marker), SatelliteCanvas, CoverSquare, CountUp,
                 AnalysisOverlay (scan line, grid, crosshair, uncertainty circle), StructureOverlay (Dvorak
                 bands, CDO outline, centre, labels), EnsembleChart (Predict's SVG chart), MiniGauge (RI ring
-                gauge), AttentionHeatmap (Explain), TypeText (typewriter), ProgressTracker, StageLayout,
+                gauge), AttentionHeatmap (Explain), TypeText (typewriter), ContinueButton (manual advance to the
+                next stage), ProgressTracker (also the back-navigation buttons), StageLayout,
                 StoryScreen (tracker + stage host = the story controller)
   stages/       One component per screen: Landing (idle), Detect, Identify, Classify, Predict, Result and
                 Explain (+ types.ts, index.ts registry). All stages are real; the placeholders are gone.
   lib/          Pure helpers (cn, logo spiral, mulberry32 random, noise, satellite generator, satelliteWorker +
-                satelliteBitmap (off-thread imagery), swirlSize, useLatest, useBeats, useElementSize,
-                explanationSentence)
+                satelliteBitmap (off-thread imagery), swirlSize, useBeats, useElementSize, explanationSentence)
   data/         Synthetic, pre-written, seeded data and AI outputs (storm.ts)
   store/        story.ts: zustand story state machine (idle > detect > identify > classify > predict > result > explain;
-                `start`, `advance`, `back` (explain to result), `reset` (Replay))
+                `start`, `advance`, `back` (explain to result), `reset` (Replay), `markDone`/`doneStages` and
+                `view` (the progress tracker's back-navigation))
   config/       timings.ts (stage durations, per-stage beats, `STAGE_MOTION`, the ONE shared stage transition),
                 stages.ts (titles, sentences, tracker steps), map.ts, imagery.ts (image sizes + prewarm list),
                 risk.ts (risk level to badge colour), app.ts
@@ -477,3 +488,76 @@ Dark mission-control theme. Use only these tokens (Tailwind classes such as `bg-
   (13.4 N 86.9 E) are a real open-sea point in the Bay of Bengal, as specified; the storm itself (Meghavi, BOB-01) is fictional.
 - **To record**: `npm run build`, then `npm run preview`, open http://localhost:4173, use full screen, click Simulate Cyclone.
   Use Replay (top right, on the Result or Explain screen) for retakes; a reload also works.
+
+### Phase 10: Manual "Continue" between stages, no auto-advance (done)
+
+- **The story no longer auto-advances.** Detect, Identify, Classify and Predict each still play their own animation
+  exactly as before (same visuals, same internal pacing), but the timer that used to call `onDone()` at the end of
+  that animation is gone. Instead each now shows `components/ContinueButton.tsx` once its animation finishes, and
+  the story only moves to the next stage when the visitor clicks it: "Continue to Identification" (Detect),
+  "Continue to Classification" (Identify), "Continue to Prediction" (Classify), "Continue to Result" (Predict).
+  `ContinueButton` matches the look of Result's `Explore AI Explanation` button (`btn-glow`, arrow icon) and fades
+  in about 0.9 s after its animation's own last element appears, so it reads as a pause, not a jump cut. Result and
+  Explain are unchanged: they already waited for a click (`Explore AI Explanation`, `Back to result`).
+- **`config/timings.ts`**: `STAGE_SECONDS` and the four `*_BEATS` objects (`DETECT_BEATS`, `IDENTIFY_BEATS`,
+  `CLASSIFY_BEATS`, `PREDICT_BEATS`) are unchanged except that the `end: 1` entry (and, in Detect, the hardcoded
+  `at(1, ...)` timer) is gone from each — that fraction only ever scheduled the auto-advance, it drove no visual.
+  Every fraction before it, and `STAGE_SECONDS` itself (the scale the fractions are multiplied against), still
+  drives the stage's own animation exactly as before, so all internal timing is unchanged.
+- **Cleanup**: `lib/useLatest.ts` was deleted — it existed only so a timer could call the latest `onDone` safely;
+  with no more auto-advance timers nothing used it. The risk-level badge colours, which had been written out
+  separately in `Predict.tsx` and `Result.tsx`, were pulled into one place, `config/risk.ts` (`RISK_TONE`), while
+  touching those files for this change.
+- **Progress tracker and every stage's visuals are untouched** — this phase only replaces the trigger for moving
+  from one stage to the next; nothing about what each stage shows or how it animates changed.
+- Verified (headless Edge, real time; dev server and the production build): every stage's Continue button stays
+  disabled and invisible until its animation finishes, then becomes clickable; the story sat on each stage for
+  30 s+ (well past its old auto-advance point) with no change, confirming nothing times out on its own; clicking
+  each button in turn reached Result with all five tracker steps ticked, exactly as before; Result is unaffected
+  (no Continue-labelled button appears there, only Explore AI Explanation). Page overflow is 0 px on every stage
+  at 1920x1080, 1440x900, 1366x768 and 1280x720 (the extra button fits inside the existing `short:` spacing with
+  no changes needed there). No console errors or warnings.
+
+### Phase 11: Clickable progress tracker (done)
+
+- **Detect, Identify, Classify and Predict RI's tracker items are now real `<button>`s.** Click an already-finished
+  one and the story jumps back to it, showing its finished result immediately — the reveal is never replayed. Click
+  one not reached yet and a small "Not processed yet" tooltip appears next to it for about 1.8 s; nothing navigates.
+  Clicking the currently-viewed step is a no-op. Result stays exactly as it was: a plain, non-interactive marker,
+  reachable only through Predict RI's Continue button — never a tracker target, per the brief.
+- **Store** (`store/story.ts`): `doneStages` (`Partial<Record<Stage, true>>`) records which of the four auto-playing
+  stages have finished their OWN animation at least once — set the moment the animation ends, not when Continue is
+  clicked, so a stage that finished but hasn't been advanced past yet still counts as "done" if you navigate away and
+  back to it. `markDone(stage)` sets it (idempotent); `view(stage)` is the tracker's jump: a no-op unless the target
+  is done and isn't the stage already showing. `reset()` (Replay) clears `doneStages` too. `advance()` is unchanged —
+  it just moves to the next stage in order regardless of doneStages, which is what lets Continue correctly walk
+  forward through already-finished territory after a back-navigation.
+- **Instant rendering, not a replay.** Each of the four stages reads its own `doneStages` flag (`useStory((s) =>
+  s.doneStages.detect ?? false)`, and so on) as `instant`, captured once at mount (not reactive to later changes,
+  since remounting is how a fresh visit always begins — `AnimatePresence key={shown}` in `StoryScreen` guarantees a
+  full remount on every stage change, forward or back). `useBeats` gained an `instant` param: true starts every beat
+  already true and schedules no timers at all, instead of counting through them. Detect's own hand-rolled
+  useState/setTimeout logic got the equivalent treatment directly.
+- **Finding and fixing every place that would still have replayed something** took real digging, since
+  `initial={false}` (the pattern used everywhere in this app) is not sufficient on its own:
+  - `CountUp` drove its count-up with an imperative `animate()` call in a `useEffect` keyed on `run` — with `run`
+    already true at mount, it would count from 0 up to the final number all over again on every revisit. Fixed
+    generically, with no call-site changes: it now captures whether `run` was already true AT MOUNT and, if so,
+    starts (and stays) at the final value.
+  - `initial={false}` does not stop an ARRAY-valued `animate` target (a keyframe sequence, as opposed to a single
+    target value) from playing through in full on mount — found and fixed two of these by testing, not by
+    inspection, since they're easy to miss: `LockReticle`'s crosshair search-and-lock wander (Identify) and
+    `ScanLine`'s top-to-bottom sweep (Identify) each gained an `instant` prop that swaps the animated keyframe path
+    for a single already-settled target. `Identify.tsx`'s own `ConfidenceRing` had an explicit `initial={{ pathLength:
+    0 }}` (a single value, but still an explicit non-`false` initial) that would re-draw the ring from 0% on every
+    mount; changed to `initial={false}`. Every other `animate` prop in the app (checked exhaustively, listed in this
+    phase's own working notes) uses single target values with `initial={false}` already, which is safe as-is.
+  - `StatusRow`'s tick/spinner icons needed no change: they are switched via `AnimatePresence initial={false}`,
+    which already means whichever icon is present at first mount does not play an entrance animation.
+- Verified (headless Edge, real time; dev server and the production build, 1920x1080/1366x768/1280x720): the exact
+  scenario in the request — reach Predict RI, click back to Identify via the tracker, click Continue twice — lands
+  back on Predict RI with byte-identical page text to the original (67%/40%/ELEVATED/all four ticks/chart fully
+  drawn), not recomputed or recounted. Navigating to any of the four finished stages takes about 0.46 s (just the
+  standard 0.4 s screen transition, confirming no multi-second replay). The tooltip appears only on an unreached
+  step, blocks navigation, clears itself, and does not overlap or clip at 1366x768 or 1280x720. Clicking the current
+  step and clicking Result (not a button) do nothing. No console errors or warnings on any run.

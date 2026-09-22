@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion'
 import { useEffect, useRef } from 'react'
 import { Badge } from '../components/Badge'
+import { ContinueButton } from '../components/ContinueButton'
 import { CountUp } from '../components/CountUp'
 import { EnsembleChart } from '../components/EnsembleChart'
 import { SatelliteCanvas } from '../components/SatelliteCanvas'
@@ -13,7 +14,7 @@ import { ensemble, riAssessment } from '../data/storm'
 import { cn } from '../lib/cn'
 import { useBeats } from '../lib/useBeats'
 import { useElementSize } from '../lib/useElementSize'
-import { useLatest } from '../lib/useLatest'
+import { useStory } from '../store/story'
 import type { StageProps } from './types'
 
 const ease: [number, number, number, number] = [0.4, 0, 0.2, 1]
@@ -52,15 +53,18 @@ function ProbabilityStat({ label, value, paths, run, seconds, emphasis }: Probab
 /**
  * Stage 4, Predict RI: the big reveal. The satellite image shrinks to a corner thumbnail and a chart takes over:
  * 30 possible futures draw outward from "now", then the median, the 10-90% band and the +30 kt line; the paths
- * that reach it turn warm. Then the probabilities, risk level and callouts appear, and the completion lines tick.
- * Timing: STAGE_SECONDS.predict and PREDICT_BEATS in config/timings.ts.
+ * that reach it turn warm. Then the probabilities, risk level and callouts appear, the completion lines tick, and
+ * a Continue button appears. The animation follows STAGE_SECONDS.predict and PREDICT_BEATS in config/timings.ts;
+ * the story only moves to Result when the visitor clicks Continue. If the progress tracker jumped straight here
+ * because it was already finished, `instant` skips the whole build-up and shows the finished chart immediately.
  */
 export function Predict({ onDone }: StageProps) {
-  const doneRef = useLatest(onDone)
-  const b = useBeats(TOTAL, PREDICT_BEATS)
+  const instant = useStory((s) => s.doneStages.predict ?? false)
+  const markDone = useStory((s) => s.markDone)
+  const b = useBeats(TOTAL, PREDICT_BEATS, instant)
   useEffect(() => {
-    if (b.end) doneRef.current()
-  }, [b.end, doneRef])
+    if (b.line4) markDone('predict')
+  }, [b.line4, markDone])
 
   const areaRef = useRef<HTMLDivElement>(null)
   const area = useElementSize(areaRef)
@@ -171,6 +175,8 @@ export function Predict({ onDone }: StageProps) {
           </motion.div>
         ))}
       </motion.div>
+
+      <ContinueButton show={b.line4} label="Continue to Result" onClick={onDone} />
     </StageLayout>
   )
 }

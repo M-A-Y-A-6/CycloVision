@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion'
 import { TriangleAlert } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { ContinueButton } from '../components/ContinueButton'
 import { MonitoringMap } from '../components/MonitoringMap'
 import { SatelliteCanvas } from '../components/SatelliteCanvas'
 import { StageLayout } from '../components/StageLayout'
@@ -10,7 +11,7 @@ import { THUMB_PX } from '../config/imagery'
 import { DETECT_BEATS, STAGE_SECONDS } from '../config/timings'
 import { cn } from '../lib/cn'
 import type { SatelliteChannel } from '../lib/satellite'
-import { useLatest } from '../lib/useLatest'
+import { useStory } from '../store/story'
 import type { StageProps } from './types'
 
 const ease: [number, number, number, number] = [0.4, 0, 0.2, 1]
@@ -72,15 +73,19 @@ function SourceRow({ label, channel, visible, status }: SourceRowProps) {
 /**
  * Stage 1, Detect. Four sources appear one after another, each spinning, then ticking with its thumbnail.
  * A swirl builds on the map as they arrive; after the fourth tick a marker and "Cyclone-like system detected"
- * appear. The timing follows STAGE_SECONDS.detect and DETECT_BEATS in config/timings.ts.
+ * appear, then a Continue button. The animation follows STAGE_SECONDS.detect and DETECT_BEATS in
+ * config/timings.ts; the story only moves to Identify when the visitor clicks Continue. If the progress
+ * tracker jumped straight here because it was already finished, `instant` skips straight to the end.
  */
 export function Detect({ onDone }: StageProps) {
-  const doneRef = useLatest(onDone)
-  const [shown, setShown] = useState(0) // rows on screen
-  const [ticked, setTicked] = useState(0) // rows finished
-  const [detected, setDetected] = useState(false)
+  const instant = useStory((s) => s.doneStages.detect ?? false)
+  const markDone = useStory((s) => s.markDone)
+  const [shown, setShown] = useState(() => (instant ? SOURCES.length : 0)) // rows on screen
+  const [ticked, setTicked] = useState(() => (instant ? SOURCES.length : 0)) // rows finished
+  const [detected, setDetected] = useState(instant)
 
   useEffect(() => {
+    if (instant) return
     const total = STAGE_SECONDS.detect
     const at = (fraction: number, fn: () => void) => setTimeout(fn, fraction * total * 1000)
     const { firstRow, rowGap, spin, detectionLag } = DETECT_BEATS
@@ -91,10 +96,13 @@ export function Detect({ onDone }: StageProps) {
     })
     const lastTick = firstRow + (SOURCES.length - 1) * rowGap + spin
     timers.push(at(lastTick + detectionLag, () => setDetected(true)))
-    timers.push(at(1, () => doneRef.current()))
 
     return () => timers.forEach(clearTimeout)
-  }, [doneRef])
+  }, [instant])
+
+  useEffect(() => {
+    if (detected) markDone('detect')
+  }, [detected, markDone])
 
   const receiving = ticked < SOURCES.length
 
@@ -136,6 +144,8 @@ export function Detect({ onDone }: StageProps) {
         <TriangleAlert className="size-5 shrink-0 text-amber" aria-hidden="true" />
         <span className="font-medium text-ink">Cyclone-like system detected</span>
       </motion.div>
+
+      <ContinueButton show={detected} label="Continue to Identification" onClick={onDone} />
     </StageLayout>
   )
 }

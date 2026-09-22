@@ -3,7 +3,12 @@
  * All values are in seconds.
  */
 
-/** How long each auto-advancing stage lasts. Result has no timer: it waits for a click. */
+/**
+ * How many seconds each stage's own animation is scaled to: the fractions in its BEATS object (below) are
+ * multiplied by this to get real seconds. The story never auto-advances — every stage plays this animation
+ * through, then shows a "Continue" button (see components/ContinueButton.tsx), and only a click moves it on.
+ * Result and Explain have no duration of their own: they wait for a click from the moment they appear.
+ */
 export const STAGE_SECONDS = {
   detect: 8,
   identify: 7,
@@ -14,7 +19,8 @@ export const STAGE_SECONDS = {
 /**
  * Order of events inside the Detect stage, as fractions of STAGE_SECONDS.detect (so changing that duration
  * rescales the whole sequence). With the default 8 s: rows appear at 0.5, 1.5, 2.5 and 3.5 s, each ticks
- * 0.9 s later, "Cyclone-like system detected" shows 0.6 s after the last tick (5.0 s), and the stage ends at 8 s.
+ * 0.9 s later, "Cyclone-like system detected" shows 0.6 s after the last tick (5.0 s), and the Continue
+ * button fades in shortly after that.
  */
 export const DETECT_BEATS = {
   /** First source row appears. */
@@ -32,7 +38,8 @@ export const DETECT_BEATS = {
  * the map zooms into the storm 0.35 to 2.1 s, cross-fading into the satellite image from 1.3 s; a scan line
  * sweeps the image (2.1 to 2.9 s); a grid appears and tightens toward the centre (2.4 to 3.85 s); the crosshair
  * searches and locks on (2.9 to 4.05 s) while the coordinates settle; the uncertainty circle appears (4.2 s);
- * movement (4.5 s) and confidence (5.0 s) settle in; "Cyclone center identified" shows at 5.7 s; done at 7 s.
+ * movement (4.5 s) and confidence (5.0 s) settle in; "Cyclone center identified" shows at 5.7 s, then the
+ * Continue button fades in.
  */
 export const IDENTIFY_BEATS = {
   zoom: 0.05,
@@ -49,7 +56,6 @@ export const IDENTIFY_BEATS = {
   movement: 0.64,
   confidence: 0.72,
   identified: 0.82,
-  end: 1,
 } as const
 
 /**
@@ -57,7 +63,8 @@ export const IDENTIFY_BEATS = {
  * the three curved-band arcs draw one after another (0.35 to 1.4 s) and get their label; the CDO outline draws
  * (1.75 to 2.6 s) and gets its label; the centre marker appears (2.8 s) with its label; the result panel shows
  * (3.3 s) and its five bars fill one by one, 0.35 s apart (3.4 to 5.4 s); the top match and T-number show
- * (5.25 s); "Structure classified" (5.65 s) and "Dvorak-aligned assessment available" (6.1 s); done at 7 s.
+ * (5.25 s); "Structure classified" (5.65 s) and "Dvorak-aligned assessment available" (6.1 s), then the
+ * Continue button fades in.
  */
 export const CLASSIFY_BEATS = {
   bands: 0.05,
@@ -75,7 +82,6 @@ export const CLASSIFY_BEATS = {
   topMatch: 0.75,
   structure: 0.81,
   assessment: 0.87,
-  end: 1,
 } as const
 
 /**
@@ -84,7 +90,8 @@ export const CLASSIFY_BEATS = {
  * the 30 ensemble paths draw one after another (1.1 to 3.2 s), then the median (3.2 s), the 10-90% band fades
  * in (4.0 s) and the dashed +30 kt line draws (4.7 s); the paths that cross it turn warm (5.4 s). The results
  * appear (5.6 s), then the "Probability spread" (6.1 s) and "Uncertainty band" (6.3 s) callouts and the risk
- * badge (6.6 s), and the four completion lines tick one by one (6.8, 7.3, 7.7, 8.2 s). Done at 9 s.
+ * badge (6.6 s), and the four completion lines tick one by one (6.8, 7.3, 7.7, 8.2 s), then the Continue
+ * button fades in.
  */
 export const PREDICT_BEATS = {
   shrink: 0.02,
@@ -102,7 +109,6 @@ export const PREDICT_BEATS = {
   line2: 0.81,
   line3: 0.86,
   line4: 0.91,
-  end: 1,
 } as const
 
 /**

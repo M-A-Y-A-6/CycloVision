@@ -6,6 +6,12 @@ export type Stage = (typeof STAGES)[number]
 
 interface StoryState {
   stage: Stage
+  /**
+   * Stages whose own animation has finished at least once, whether or not Continue has since been clicked.
+   * The progress tracker uses this: clicking an already-done step jumps back to it and shows it exactly as it
+   * looked when it finished, instead of replaying it. Never cleared except by reset().
+   */
+  doneStages: Partial<Record<Stage, true>>
   /** True once the visitor has moved on from the Result screen, so coming back to it can replay quickly. */
   resultSeen: boolean
   /** Simulate Cyclone button: idle -> detect. */
@@ -18,12 +24,21 @@ interface StoryState {
   advance: (from: Stage) => void
   /** Explain -> result: the "Back to result" button. */
   back: () => void
+  /** A stage calls this once its own animation reaches its end, whether or not Continue has been clicked yet. */
+  markDone: (stage: Stage) => void
+  /**
+   * The progress tracker: jump to a stage that has already finished, to view its result again without
+   * replaying it. Ignored for the stage already being viewed and for any stage that has not finished yet —
+   * ProgressTracker itself is responsible for not calling this in those cases.
+   */
+  view: (stage: Stage) => void
   /** The Replay button: back to the initial screen with a clean slate, for retakes. */
   reset: () => void
 }
 
 export const useStory = create<StoryState>()((set, get) => ({
   stage: 'idle',
+  doneStages: {},
   resultSeen: false,
   start: () => get().advance('idle'),
   advance: (from) =>
@@ -34,5 +49,14 @@ export const useStory = create<StoryState>()((set, get) => ({
       return { stage: next, resultSeen: state.resultSeen || from === 'result' }
     }),
   back: () => set((state) => (state.stage === 'explain' ? { stage: 'result' } : state)),
-  reset: () => set({ stage: 'idle', resultSeen: false }),
+  markDone: (stage) => {
+    if (get().doneStages[stage]) return
+    set((state) => ({ doneStages: { ...state.doneStages, [stage]: true } }))
+  },
+  view: (stage) => {
+    const state = get()
+    if (stage === state.stage || !state.doneStages[stage]) return
+    set({ stage })
+  },
+  reset: () => set({ stage: 'idle', doneStages: {}, resultSeen: false }),
 }))

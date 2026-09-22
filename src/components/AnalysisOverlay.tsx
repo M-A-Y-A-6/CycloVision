@@ -65,26 +65,35 @@ interface ReticleProps {
   /** How long the search takes, ending in the lock. */
   lockSeconds: number
   locked: boolean
+  /**
+   * Already resolved (revisiting a finished stage): render settled on the centre and skip the lock-on ripple.
+   * The search itself is a keyframe path (an array of positions), which framer-motion always plays through on
+   * mount regardless of `initial`, so instant mode needs its own, single-position target to avoid replaying it.
+   */
+  instant?: boolean
 }
 
 /** A crosshair that appears off-centre, searches, and locks onto the storm centre (STORM_GEOMETRY.center). */
-export function LockReticle({ show, lockSeconds, locked }: ReticleProps) {
+export function LockReticle({ show, lockSeconds, locked, instant = false }: ReticleProps) {
   const start = { left: pct(center.x + SEARCH_PATH.x[0]), top: pct(center.y + SEARCH_PATH.y[0]), scale: SEARCH_PATH.scale[0] }
+  const settled = { left: pct(center.x), top: pct(center.y), scale: 1 }
   return (
     <motion.div
       className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2"
       initial={false}
       animate={
-        show
-          ? {
-              left: SEARCH_PATH.x.map((dx) => pct(center.x + dx)),
-              top: SEARCH_PATH.y.map((dy) => pct(center.y + dy)),
-              scale: SEARCH_PATH.scale,
-              opacity: 1,
-            }
-          : { ...start, opacity: 0 }
+        !show
+          ? { ...start, opacity: 0 }
+          : instant
+            ? { ...settled, opacity: 1 }
+            : {
+                left: SEARCH_PATH.x.map((dx) => pct(center.x + dx)),
+                top: SEARCH_PATH.y.map((dy) => pct(center.y + dy)),
+                scale: SEARCH_PATH.scale,
+                opacity: 1,
+              }
       }
-      transition={{ duration: lockSeconds, times: SEARCH_PATH.times, ease: 'easeInOut', opacity: { duration: 0.4 } }}
+      transition={{ duration: lockSeconds, times: instant ? undefined : SEARCH_PATH.times, ease: 'easeInOut', opacity: { duration: 0.4 } }}
       aria-hidden="true"
     >
       <svg viewBox="-52 -52 104 104" className="size-[104px] overflow-visible">
@@ -97,7 +106,7 @@ export function LockReticle({ show, lockSeconds, locked }: ReticleProps) {
         <circle r="46" fill="none" stroke="var(--color-accent)" strokeOpacity="0.4" strokeDasharray="2 6" />
         <circle r="2.6" fill="var(--color-accent)" />
       </svg>
-      {locked && (
+      {locked && !instant && (
         <motion.span
           className="absolute inset-0 rounded-full border border-accent"
           initial={{ scale: 0.7, opacity: 0.8 }}
@@ -127,16 +136,21 @@ export function UncertaintyCircle({ show }: { show: boolean }) {
 
 // --- Scan line --------------------------------------------------------------------------------------------
 
-/** A glowing line that sweeps once from the top of the image to the bottom. Place it over the whole visual. */
-export function ScanLine({ run, seconds }: { run: boolean; seconds: number }) {
+/**
+ * A glowing line that sweeps once from the top of the image to the bottom. Place it over the whole visual.
+ * `top`/`opacity` are keyframe arrays, which framer-motion always plays through on mount regardless of
+ * `initial`, so `instant` (revisiting a finished stage) swaps in the single settled "already swept past"
+ * target instead, to avoid replaying the sweep.
+ */
+export function ScanLine({ run, seconds, instant = false }: { run: boolean; seconds: number; instant?: boolean }) {
   return (
     <motion.div
       className="pointer-events-none absolute inset-x-0 z-30"
       initial={false}
-      animate={run ? { top: ['-3%', '103%'], opacity: [0, 1, 1, 0] } : { top: '-3%', opacity: 0 }}
+      animate={!run ? { top: '-3%', opacity: 0 } : instant ? { top: '103%', opacity: 0 } : { top: ['-3%', '103%'], opacity: [0, 1, 1, 0] }}
       transition={{
         top: { duration: seconds, ease: 'linear' },
-        opacity: { duration: seconds, ease: 'linear', times: [0, 0.1, 0.9, 1] },
+        opacity: { duration: seconds, ease: 'linear', times: instant ? undefined : [0, 0.1, 0.9, 1] },
       }}
       aria-hidden="true"
     >

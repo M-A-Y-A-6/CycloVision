@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion'
 import { useEffect, type ReactNode } from 'react'
+import { ContinueButton } from '../components/ContinueButton'
 import { CountUp } from '../components/CountUp'
 import { CoverSquare } from '../components/CoverSquare'
 import { SatelliteCanvas } from '../components/SatelliteCanvas'
@@ -11,7 +12,7 @@ import { CLASSIFY_BEATS, STAGE_SECONDS } from '../config/timings'
 import { dvorak } from '../data/storm'
 import { cn } from '../lib/cn'
 import { useBeats } from '../lib/useBeats'
-import { useLatest } from '../lib/useLatest'
+import { useStory } from '../store/story'
 import type { StageProps } from './types'
 
 const ease: [number, number, number, number] = [0.4, 0, 0.2, 1]
@@ -60,15 +61,18 @@ function Stat({ label, children }: { label: string; children: ReactNode }) {
 /**
  * Stage 3, Classify. The storm image stays in view while the Dvorak-aligned structure is drawn on it
  * (curved bands, CDO outline, centre, each labelled); then five probability bars fill one by one and the
- * top match is highlighted with its confidence and the Dvorak T-number. Timing: STAGE_SECONDS.classify and
- * CLASSIFY_BEATS in config/timings.ts.
+ * top match is highlighted with its confidence and the Dvorak T-number, then a Continue button appears.
+ * The animation follows STAGE_SECONDS.classify and CLASSIFY_BEATS in config/timings.ts; the story only moves
+ * to Predict when the visitor clicks Continue. If the progress tracker jumped straight here because it was
+ * already finished, `instant` skips the whole build-up and shows the finished result immediately.
  */
 export function Classify({ onDone }: StageProps) {
-  const doneRef = useLatest(onDone)
-  const b = useBeats(TOTAL, CLASSIFY_BEATS)
+  const instant = useStory((s) => s.doneStages.classify ?? false)
+  const markDone = useStory((s) => s.markDone)
+  const b = useBeats(TOTAL, CLASSIFY_BEATS, instant)
   useEffect(() => {
-    if (b.end) doneRef.current()
-  }, [b.end, doneRef])
+    if (b.assessment) markDone('classify')
+  }, [b.assessment, markDone])
 
   const barsFilled = [b.bar1, b.bar2, b.bar3, b.bar4, b.bar5]
   const top = dvorak.topPattern
@@ -146,6 +150,8 @@ export function Classify({ onDone }: StageProps) {
           <StatusRow label="Dvorak-aligned assessment available" status={b.assessment ? 'done' : 'idle'} className="font-medium" />
         </motion.div>
       </motion.div>
+
+      <ContinueButton show={b.assessment} label="Continue to Prediction" onClick={onDone} />
     </StageLayout>
   )
 }

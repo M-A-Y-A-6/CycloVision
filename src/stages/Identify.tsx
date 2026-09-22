@@ -3,6 +3,7 @@ import { ArrowUp } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useMap } from 'react-leaflet'
 import { LockReticle, ScanLine, TighteningGrid, UncertaintyCircle } from '../components/AnalysisOverlay'
+import { ContinueButton } from '../components/ContinueButton'
 import { CountUp } from '../components/CountUp'
 import { CoverSquare } from '../components/CoverSquare'
 import { MonitoringMap } from '../components/MonitoringMap'
@@ -16,7 +17,7 @@ import { storm } from '../data/storm'
 import { cn } from '../lib/cn'
 import { swirlPixels } from '../lib/swirlSize'
 import { useBeats } from '../lib/useBeats'
-import { useLatest } from '../lib/useLatest'
+import { useStory } from '../store/story'
 import type { StageProps } from './types'
 
 const ease: [number, number, number, number] = [0.4, 0, 0.2, 1]
@@ -48,7 +49,7 @@ function ConfidenceRing({ fraction, run }: { fraction: number; run: boolean }) {
         stroke="var(--color-accent)"
         strokeWidth="4"
         strokeLinecap="round"
-        initial={{ pathLength: 0 }}
+        initial={false}
         animate={{ pathLength: run ? fraction : 0 }}
         transition={{ duration: 1, ease: 'easeOut' }}
       />
@@ -75,15 +76,18 @@ function ReadoutRow({ label, show, children }: { label: string; show: boolean; c
 /**
  * Stage 2, Identify. The map zooms into the storm and cross-fades into the fused satellite image; the AI
  * analysis then scans it, tightens a grid, locks a crosshair on the centre and draws an uncertainty circle,
- * while the storm's centre, movement and confidence settle into the info panel. Timing: STAGE_SECONDS.identify
- * and IDENTIFY_BEATS in config/timings.ts.
+ * while the storm's centre, movement and confidence settle into the info panel, then a Continue button appears.
+ * The animation follows STAGE_SECONDS.identify and IDENTIFY_BEATS in config/timings.ts; the story only moves to
+ * Classify when the visitor clicks Continue. If the progress tracker jumped straight here because it was
+ * already finished, `instant` skips the whole build-up and shows the finished result immediately.
  */
 export function Identify({ onDone }: StageProps) {
-  const doneRef = useLatest(onDone)
-  const b = useBeats(TOTAL, IDENTIFY_BEATS)
+  const instant = useStory((s) => s.doneStages.identify ?? false)
+  const markDone = useStory((s) => s.markDone)
+  const b = useBeats(TOTAL, IDENTIFY_BEATS, instant)
   useEffect(() => {
-    if (b.end) doneRef.current()
-  }, [b.end, doneRef])
+    if (b.identified) markDone('identify')
+  }, [b.identified, markDone])
 
   // Where the storm is on screen and how big the visual is, so the zoom can be aimed at the storm and
   // end with it in the middle of the panel.
@@ -144,11 +148,11 @@ export function Identify({ onDone }: StageProps) {
               <SatelliteCanvas channel="fused" size={STORM_IMAGE_PX} className="size-full" />
               <TighteningGrid visible={b.grid} tighten={b.tighten} tightenSeconds={between('tighten', 'tightenEnd')} />
               <UncertaintyCircle show={b.uncertainty} />
-              <LockReticle show={b.crosshair} lockSeconds={lockSeconds} locked={b.lock} />
+              <LockReticle show={b.crosshair} lockSeconds={lockSeconds} locked={b.lock} instant={instant} />
             </CoverSquare>
           </motion.div>
 
-          <ScanLine run={b.scan} seconds={between('scan', 'scanEnd')} />
+          <ScanLine run={b.scan} seconds={between('scan', 'scanEnd')} instant={instant} />
         </div>
       }
     >
@@ -193,6 +197,8 @@ export function Identify({ onDone }: StageProps) {
       >
         <StatusRow label="Cyclone center identified" status={b.identified ? 'done' : 'idle'} className="font-medium" />
       </motion.div>
+
+      <ContinueButton show={b.identified} label="Continue to Classification" onClick={onDone} />
     </StageLayout>
   )
 }
