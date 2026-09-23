@@ -1,151 +1,141 @@
-import { motion } from 'framer-motion'
-import { TriangleAlert } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
+import { Cpu, Radio, Satellite, TriangleAlert, Waves, Wind, type LucideIcon } from 'lucide-react'
+import { useEffect } from 'react'
 import { ContinueButton } from '../components/ContinueButton'
 import { MonitoringMap } from '../components/MonitoringMap'
-import { SatelliteCanvas } from '../components/SatelliteCanvas'
 import { StageLayout } from '../components/StageLayout'
 import { StatusRow } from '../components/StatusRow'
 import { DetectionMarker, StormSwirl } from '../components/StormMapOverlays'
-import { THUMB_PX } from '../config/imagery'
 import { DETECT_BEATS, STAGE_SECONDS } from '../config/timings'
 import { cn } from '../lib/cn'
-import type { SatelliteChannel } from '../lib/satellite'
+import { useBeats } from '../lib/useBeats'
+import { useCase } from '../lib/useCase'
 import { useStory } from '../store/story'
 import type { StageProps } from './types'
 
 const ease: [number, number, number, number] = [0.4, 0, 0.2, 1]
+const TOTAL = STAGE_SECONDS.detect
 
-const SOURCES: ReadonlyArray<{ label: string; channel: SatelliteChannel }> = [
-  { label: 'IR (INSAT-3D/3DR)', channel: 'ir' },
-  { label: 'Water Vapor', channel: 'wv' },
-  { label: 'Microwave', channel: 'mw' },
-  { label: 'SST', channel: 'sst' },
+const SOURCES: ReadonlyArray<{ label: string; icon: LucideIcon }> = [
+  { label: 'INSAT', icon: Satellite },
+  { label: 'SAPHIR Microwave', icon: Radio },
+  { label: 'Ocean', icon: Waves },
+  { label: 'Atmospheric', icon: Wind },
+  { label: 'NWP', icon: Cpu },
 ]
+const ICON_BEATS = ['icon1', 'icon2', 'icon3', 'icon4', 'icon5'] as const
 
-/** Three dots that fade in and out one after another. */
-function Ellipsis({ animate }: { animate: boolean }) {
-  return (
-    <span aria-hidden="true">
-      {[0, 1, 2].map((i) => (
-        <motion.span
-          key={i}
-          animate={{ opacity: animate ? [0.25, 1, 0.25] : 1 }}
-          transition={animate ? { duration: 1.4, repeat: Infinity, delay: i * 0.22, ease: 'easeInOut' } : { duration: 0.3 }}
-        >
-          .
-        </motion.span>
-      ))}
-    </span>
-  )
-}
+const PREPROCESS_STEPS = ['Data Cleaning', 'Geocoding & Reprojection', 'Storm-Centered Cropping', 'Normalization & Calibration']
+const STEP_BEATS = ['step1', 'step2', 'step3', 'step4'] as const
 
-interface SourceRowProps {
-  label: string
-  channel: SatelliteChannel
-  visible: boolean
-  status: 'idle' | 'active' | 'done'
-}
-
-/** One data source: the status row on the left, and its satellite thumbnail fading in on the right when it is ticked. */
-function SourceRow({ label, channel, visible, status }: SourceRowProps) {
+/** One data-source chip: dim until its turn, then lights up in the accent colour. */
+function SourceIcon({ icon: Icon, label, lit }: { icon: LucideIcon; label: string; lit: boolean }) {
   return (
     <motion.div
       initial={false}
-      animate={{ opacity: visible ? 1 : 0, x: visible ? 0 : -14 }}
-      transition={{ duration: 0.45, ease }}
-      aria-hidden={!visible}
-      className="short:py-1.5 flex items-center justify-between gap-4 rounded-lg border border-line bg-panel px-4 py-2"
+      animate={{ opacity: lit ? 1 : 0.4, scale: lit ? 1 : 0.94 }}
+      transition={{ duration: 0.5, ease }}
+      className={cn(
+        'flex flex-col items-center gap-1.5 rounded-lg border px-2 py-3 text-center transition-colors duration-500',
+        lit ? 'border-accent/60 bg-accent/10 text-accent shadow-[0_0_14px_rgb(34_211_238/0.25)]' : 'border-line bg-panel text-muted',
+      )}
     >
-      <StatusRow label={label} status={status} />
-      <motion.div
-        initial={false}
-        animate={{ opacity: status === 'done' ? 1 : 0, scale: status === 'done' ? 1 : 0.85 }}
-        transition={{ duration: 0.6, ease }}
-        className="short:size-10 size-12 shrink-0 overflow-hidden rounded-md border border-line bg-base"
-      >
-        <SatelliteCanvas channel={channel} size={THUMB_PX} className="size-full" />
-      </motion.div>
+      <Icon className="size-5" aria-hidden="true" />
+      <span className="text-[10px] leading-tight font-medium">{label}</span>
     </motion.div>
   )
 }
 
 /**
- * Stage 1, Detect. Four sources appear one after another, each spinning, then ticking with its thumbnail.
- * A swirl builds on the map as they arrive; after the fourth tick a marker and "Cyclone-like system detected"
- * appear, then a Continue button. The animation follows STAGE_SECONDS.detect and DETECT_BEATS in
- * config/timings.ts; the story only moves to Identify when the visitor clicks Continue. If the progress
- * tracker jumped straight here because it was already finished, `instant` skips straight to the end.
+ * Stage 1, Detect ("Simulate Cyclone" on the tracker; model stage: Data Ingestion & Preprocessing). Five
+ * source icons (INSAT, SAPHIR microwave, Ocean, Atmospheric, NWP) light up one after another, then the row
+ * gives way to a four-step preprocessing checklist (Data Cleaning, Geocoding & Reprojection, Storm-Centered
+ * Cropping, Normalization & Calibration) that ticks off one by one. A swirl builds on the map behind it as
+ * the sources arrive; the final tick shows a calm pulsing amber marker and "Preprocessing complete", then a
+ * Continue button. The animation follows STAGE_SECONDS.detect and DETECT_BEATS in config/timings.ts; the
+ * story only moves to Identify when the visitor clicks Continue. If the progress tracker jumped straight
+ * here because it was already finished, `instant` skips straight to the end.
  */
 export function Detect({ onDone }: StageProps) {
+  const caseData = useCase()
   const instant = useStory((s) => s.doneStages.detect ?? false)
   const markDone = useStory((s) => s.markDone)
-  const [shown, setShown] = useState(() => (instant ? SOURCES.length : 0)) // rows on screen
-  const [ticked, setTicked] = useState(() => (instant ? SOURCES.length : 0)) // rows finished
-  const [detected, setDetected] = useState(instant)
-
+  const b = useBeats(TOTAL, DETECT_BEATS, instant)
   useEffect(() => {
-    if (instant) return
-    const total = STAGE_SECONDS.detect
-    const at = (fraction: number, fn: () => void) => setTimeout(fn, fraction * total * 1000)
-    const { firstRow, rowGap, spin, detectionLag } = DETECT_BEATS
+    if (b.complete) markDone('detect')
+  }, [b.complete, markDone])
 
-    const timers = SOURCES.flatMap((_, i) => {
-      const appears = firstRow + i * rowGap
-      return [at(appears, () => setShown(i + 1)), at(appears + spin, () => setTicked(i + 1))]
-    })
-    const lastTick = firstRow + (SOURCES.length - 1) * rowGap + spin
-    timers.push(at(lastTick + detectionLag, () => setDetected(true)))
+  const litCount = ICON_BEATS.filter((k) => b[k]).length
+  const stepDone = STEP_BEATS.map((k) => b[k])
+  const swirlProgress = b.checklist ? 1 : litCount / SOURCES.length
+  const receiving = !b.complete
 
-    return () => timers.forEach(clearTimeout)
-  }, [instant])
-
-  useEffect(() => {
-    if (detected) markDone('detect')
-  }, [detected, markDone])
-
-  const receiving = ticked < SOURCES.length
+  const stepStatus = (i: number): 'idle' | 'active' | 'done' => {
+    if (stepDone[i]) return 'done'
+    const active = i === 0 ? b.checklist : stepDone[i - 1]
+    return active ? 'active' : 'idle'
+  }
 
   return (
     <StageLayout
       stage="detect"
+      pipelineLabels={['Data Ingestion & Preprocessing']}
       visual={
         <div className="absolute inset-0">
           <MonitoringMap className="size-full">
-            <StormSwirl progress={ticked / SOURCES.length} />
-            <DetectionMarker show={detected} />
+            <StormSwirl caseData={caseData} progress={swirlProgress} />
+            <DetectionMarker caseData={caseData} show={b.complete} />
           </MonitoringMap>
         </div>
       }
     >
       <p className={cn('text-[1rem] font-medium transition-colors duration-500', receiving ? 'text-ink' : 'text-muted')}>
-        Receiving multi-source satellite observations
-        <Ellipsis animate={receiving} />
+        {b.checklist ? 'Preparing the storm scene for the model' : 'Consulting the data sources'}
       </p>
 
-      <div className="space-y-2.5">
-        {SOURCES.map((source, i) => (
-          <SourceRow
-            key={source.channel}
-            {...source}
-            visible={i < shown}
-            status={i < ticked ? 'done' : i < shown ? 'active' : 'idle'}
-          />
-        ))}
-      </div>
+      <AnimatePresence mode="wait" initial={false}>
+        {!b.checklist ? (
+          <motion.div
+            key="sources"
+            initial={{ opacity: 0, scale: 0.97 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.96, transition: { duration: 0.35, ease } }}
+            transition={{ duration: 0.4, ease }}
+            className="grid grid-cols-5 gap-2"
+          >
+            {SOURCES.map((source, i) => (
+              <SourceIcon key={source.label} {...source} lit={i < litCount} />
+            ))}
+          </motion.div>
+        ) : (
+          <motion.div
+            key="checklist"
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.45, ease, delay: 0.1 }}
+            className="space-y-2.5"
+          >
+            {PREPROCESS_STEPS.map((step, i) => (
+              <div key={step} className="short:py-1.5 rounded-lg border border-line bg-panel px-4 py-2">
+                <StatusRow label={step} status={stepStatus(i)} />
+              </div>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <motion.div
         initial={false}
-        animate={{ opacity: detected ? 1 : 0, y: detected ? 0 : 8 }}
+        animate={{ opacity: b.complete ? 1 : 0, y: b.complete ? 0 : 8 }}
         transition={{ duration: 0.7, ease }}
-        aria-hidden={!detected}
+        aria-hidden={!b.complete}
         className="flex items-center gap-3 rounded-lg border border-amber/30 bg-amber/10 px-4 py-3"
       >
         <TriangleAlert className="size-5 shrink-0 text-amber" aria-hidden="true" />
-        <span className="font-medium text-ink">Cyclone-like system detected</span>
+        <span className="font-medium text-ink">Preprocessing complete</span>
       </motion.div>
 
-      <ContinueButton show={detected} label="Continue to Identification" onClick={onDone} />
+      <ContinueButton show={b.complete} label="Continue to Identification" onClick={onDone} />
     </StageLayout>
   )
 }

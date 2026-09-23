@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import type { RiRiskLevel } from '../data/storm'
+import type { RiRiskLevel } from '../data/cases'
 import { CountUp } from './CountUp'
 
 // Literal colours (the design tokens green, accent, amber, red) so SVG can use them directly.
@@ -23,17 +23,22 @@ interface MiniGaugeProps {
   /** The gauge fills when this turns true. */
   run: boolean
   seconds: number
+  /** Pixel diameter of the ring. Defaults to 64 (Result's corner gauge); Predict RI's is bigger. */
+  size?: number
 }
 
 /**
- * A small ring gauge for the RI probability: the ring is split into the four risk zones, and a bright arc
- * fills counter-clockwise from the top up to the probability, ending in the zone that gives the risk level.
+ * A ring gauge for the RI probability: the ring is split into the four risk zones, and a bright arc fills
+ * counter-clockwise from the top up to the probability, ending in the zone that gives the risk level. The
+ * drawing is a fixed 64x64 viewBox scaled by `size`, so the ring, stroke and everything in the SVG stay
+ * proportional at any size; only the number's font size is set separately (it is ordinary DOM text).
  */
-export function MiniGauge({ probabilityPct, level, run, seconds }: MiniGaugeProps) {
+export function MiniGauge({ probabilityPct, level, run, seconds, size = 64 }: MiniGaugeProps) {
   const colour = LEVEL_COLOUR[level]
+  const fontSize = Math.round((size / 64) * 15)
   return (
     <div className="flex items-center gap-3">
-      <div className="relative size-16 shrink-0">
+      <div className="relative shrink-0" style={{ width: size, height: size }}>
         {/* Mirrored and turned so the ring starts at the top and runs counter-clockwise. */}
         <svg viewBox="0 0 64 64" className="absolute inset-0 rotate-90 -scale-x-100" aria-hidden="true">
           {ZONES.map((zone) => (
@@ -64,7 +69,7 @@ export function MiniGauge({ probabilityPct, level, run, seconds }: MiniGaugeProp
             transition={{ pathLength: { duration: seconds, ease: 'easeOut' }, opacity: { duration: 0.2 } }}
           />
         </svg>
-        <span className="num absolute inset-0 grid place-items-center text-[15px] font-semibold text-ink">
+        <span className="num absolute inset-0 grid place-items-center font-semibold text-ink" style={{ fontSize }}>
           <span>
             <CountUp to={Math.round(probabilityPct)} run={run} seconds={seconds} />%
           </span>

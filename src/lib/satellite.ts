@@ -3,12 +3,19 @@
  *
  * The storm is built from one logarithmic spiral of rain bands, layered noise and a central dense
  * overcast (CDO). Every channel is derived from the same storm, so IR, WV, MW, SST and the fused
- * view all line up pixel for pixel, and with STORM_GEOMETRY.
+ * view all line up pixel for pixel, and with its StormGeometry.
  *
  * Coordinates: normalised 0-1, x to the right, y DOWN (canvas convention). The canvas should be
  * square. The storm centre is always at (0.5, 0.5); the image spans roughly 800 km.
+ *
+ * Per case (added for the 4-case model): `seed` gives each case a different cloud texture, and
+ * `hotspots`/`ringRadius` (the "eye parameters") let each case's eyewall read tighter and clearer or
+ * looser and weaker, matching how organised its classification says it is. Everything else — the arm
+ * layout, the CDO wobble, every colour ramp — is the same fixed algorithm for every case, unchanged
+ * from before. A case's `geometry` (see data/cases.ts) is computed once with these two knobs and must
+ * be passed to `renderSatellite`, so the image and every overlay that reads the same geometry always
+ * agree pixel-for-pixel.
  */
-import { storm } from '../data/storm'
 import { createNoise, type Noise } from './noise'
 import { mulberry32 } from './random'
 
@@ -17,8 +24,12 @@ export type SatelliteChannel = (typeof SATELLITE_CHANNELS)[number]
 
 export interface SatelliteOptions {
   channel: SatelliteChannel
-  /** Seeds the cloud texture only. The storm geometry never depends on it. */
+  /** Seeds the cloud texture. Different per case, so no two cases look pixel-identical. */
   seed: number
+  /** This case's geometry (see buildGeometry/data/cases.ts). Defaults to the standard layout. */
+  geometry?: StormGeometry
+  /** Degrees C at the storm centre, used only by the SST channel. Defaults to the standard 30.1. */
+  sstCenterC?: number
 }
 
 // ---------------------------------------------------------------------------
@@ -58,18 +69,13 @@ const SPIRAL_REF_R = 0.2
 const ARM_PHASE = 0.6
 const ARM_SPAN = TAU / 3
 
-const INNER_RING_R = 0.065
-
+/** The standard eyewall ring radius and hotspot layout, used unless a case overrides them. */
+export const DEFAULT_RING_RADIUS = 0.065
 /** Radial extent of each of the three spiral arms. The same spiral family, 120 degrees apart. */
 const ARMS = [
   { r0: 0.15, r1: 0.44 },
   { r0: 0.17, r1: 0.42 },
   { r0: 0.19, r1: 0.4 },
-]
-
-const HOTSPOT_DEFS = [
-  { deg: 50, r: 0.105, radius: 0.03 },
-  { deg: 232, r: 0.095, radius: 0.026 },
 ]
 
 /** CDO outline radius at angle th (radians, counter-clockwise on screen). */
@@ -79,9 +85,29 @@ function cdoRadius(th: number): number {
 
 const polar = (th: number, r: number): Point => ({ x: CX + r * Math.cos(th), y: CY - r * Math.sin(th) })
 
-const HOTSPOTS: Hotspot[] = HOTSPOT_DEFS.map((h) => ({ ...polar((h.deg * Math.PI) / 180, h.r), radius: h.radius }))
+/**
+ * A hotspot placed by angle (degrees, counter-clockwise from east) and distance from the storm centre,
+ * rather than by raw x/y — convenient for describing "an intense patch near the eyewall" per case. The
+ * result is a plain Cartesian `Hotspot`, the same shape `explainability.gradCamHotspots` uses (data/cases.ts),
+ * so a case can build its hotspots once and use that one array for both the image and the explainability data.
+ */
+export function hotspotAt(deg: number, r: number, radius: number): Hotspot {
+  return { ...polar((deg * Math.PI) / 180, r), radius }
+}
 
-function buildGeometry(): StormGeometry {
+/** The standard eyewall hotspot layout, used unless a case overrides it. */
+export const DEFAULT_HOTSPOTS: ReadonlyArray<Hotspot> = [hotspotAt(50, 0.105, 0.03), hotspotAt(232, 0.095, 0.026)]
+
+/**
+ * Builds a storm's geometry. The arm layout and the CDO's wobble are the one fixed algorithm, shared by
+ * every case unchanged. `hotspots` and `ringRadius` are the two "eye parameters" a case can override (see
+ * data/cases.ts): a tighter, smaller ring and tucked-in hotspots read as a more organised, higher-risk
+ * storm; a larger, looser ring reads as weaker and less organised. Both default to the standard layout.
+ */
+export function buildGeometry(
+  hotspots: ReadonlyArray<Hotspot> = DEFAULT_HOTSPOTS,
+  ringRadius: number = DEFAULT_RING_RADIUS,
+): StormGeometry {
   const bands = ARMS.map((arm, k) => {
     const steps = 48
     return Array.from({ length: steps + 1 }, (_, i) => {
@@ -95,10 +121,26 @@ function buildGeometry(): StormGeometry {
     const th = (i / 96) * TAU
     return polar(th, cdoRadius(th))
   })
-  return { center: { x: CX, y: CY }, innerRingRadius: INNER_RING_R, bands, cdo, hotspots: HOTSPOTS }
+  return { center: { x: CX, y: CY }, innerRingRadius: ringRadius, bands, cdo, hotspots: [...hotspots] }
 }
 
+/** The standard layout (used by anything that does not pass its own case geometry). */
 export const STORM_GEOMETRY: StormGeometry = buildGeometry()
+
+/**
+ * The normalised [x, y, w, h] box around a storm's CDO outline — the "cyclone detection" bounding box
+ * (YOLO-NAS, per the architecture story). Padded slightly so the box visibly contains the cloud mass.
+ */
+export function boundingBoxFor(geometry: StormGeometry): [number, number, number, number] {
+  const xs = geometry.cdo.map((p) => p.x)
+  const ys = geometry.cdo.map((p) => p.y)
+  const pad = 0.03
+  const x0 = Math.max(0, Math.min(...xs) - pad)
+  const y0 = Math.max(0, Math.min(...ys) - pad)
+  const x1 = Math.min(1, Math.max(...xs) + pad)
+  const y1 = Math.min(1, Math.max(...ys) + pad)
+  return [x0, y0, x1 - x0, y1 - y0]
+}
 
 // ---------------------------------------------------------------------------
 // Small math + colour helpers
@@ -244,7 +286,7 @@ interface Px {
   nL: number
 }
 
-function evalPixel(u: number, v: number, noise: Noise, g: Px): void {
+function evalPixel(u: number, v: number, noise: Noise, hotspots: readonly Hotspot[], g: Px): void {
   const dx = u - CX
   const dy = v - CY
   const r = Math.hypot(dx, dy)
@@ -275,7 +317,7 @@ function evalPixel(u: number, v: number, noise: Noise, g: Px): void {
   g.bandNarrow = Math.pow(ridge, 3.3) * env
 
   let hot = 0
-  for (const h of HOTSPOTS) {
+  for (const h of hotspots) {
     const d2 = (u - h.x) ** 2 + (v - h.y) ** 2
     hot = Math.max(hot, Math.exp(-d2 / (h.radius * h.radius)))
   }
@@ -304,11 +346,11 @@ function irTemperature(h: number, hot: number): number {
 }
 
 /** Microwave scattering, 0-1. Shows a CLOSED eyewall ring that IR cannot see. */
-function mwScattering(g: Px): number {
+function mwScattering(g: Px, ringRadius: number): number {
   const az = 0.86 + 0.1 * Math.cos(g.th - 0.7) + 0.05 * Math.sin(3 * g.th + 1.1)
-  const dr = (g.r - INNER_RING_R) / 0.017
+  const dr = (g.r - ringRadius) / 0.017
   const ring = az * (0.94 + 0.06 * g.nF) * Math.exp(-dr * dr)
-  const quietEye = smoothstep(INNER_RING_R - 0.035, INNER_RING_R - 0.008, g.r)
+  const quietEye = smoothstep(ringRadius - 0.035, ringRadius - 0.008, g.r)
   const stratiform = 0.3 * g.cdo * (0.75 + 0.25 * (0.5 + 0.5 * g.nT)) * quietEye
   const bands = 0.7 * g.bandNarrow * (0.6 + 0.4 * (0.5 + 0.5 * g.nT))
   const towers = 0.45 * g.hot
@@ -361,9 +403,12 @@ function poolShape(u: number, v: number): number {
 }
 const POOL_AT_CENTER = poolShape(CX, CY)
 
-/** SST in degrees Celsius. Exactly storm.current.sstC at the storm centre. */
-function sstAt(u: number, v: number, noise: Noise): number {
-  const pool = ((storm.current.sstC - SST_FAR_C) * poolShape(u, v)) / POOL_AT_CENTER
+/** Degrees C at the storm centre, used unless a case passes its own `sstCenterC`. */
+export const DEFAULT_SST_CENTER_C = 30.1
+
+/** SST in degrees Celsius. Exactly `centerC` at the storm centre. */
+function sstAt(u: number, v: number, noise: Noise, centerC: number): number {
+  const pool = ((centerC - SST_FAR_C) * poolShape(u, v)) / POOL_AT_CENTER
   const d0 = Math.hypot(u - CX, v - CY)
   const eddies = 0.7 * noise.fbm(u * 2.6 + 40, v * 2.6 + 9, 4) * smoothstep(0, 0.08, d0)
   const southWarmer = 0.8 * (v - 0.5)
@@ -385,7 +430,10 @@ export interface DrawableCanvas {
 }
 
 /** Draws the chosen channel of the demo storm into the canvas (using its current width/height). */
-export function renderSatellite(canvas: DrawableCanvas, { channel, seed }: SatelliteOptions): void {
+export function renderSatellite(
+  canvas: DrawableCanvas,
+  { channel, seed, geometry = STORM_GEOMETRY, sstCenterC = DEFAULT_SST_CENTER_C }: SatelliteOptions,
+): void {
   const W = canvas.width
   const H = canvas.height
   const ctx = canvas.getContext('2d')
@@ -396,6 +444,7 @@ export function renderSatellite(canvas: DrawableCanvas, { channel, seed }: Satel
   const image = ctx.createImageData(W, H)
   const out = image.data
   const g: Px = { r: 0, th: 0, cdo: 0, band: 0, bandWide: 0, bandNarrow: 0, hot: 0, nT: 0, nF: 0, nL: 0 }
+  const { hotspots, innerRingRadius } = geometry
 
   const needsSst = channel === 'sst' || channel === 'fused'
   const needsStorm = channel !== 'sst'
@@ -405,7 +454,7 @@ export function renderSatellite(canvas: DrawableCanvas, { channel, seed }: Satel
   if (needsSst) {
     sst = new Float32Array(W * H)
     for (let j = 0; j < H; j++) {
-      for (let i = 0; i < W; i++) sst[j * W + i] = sstAt((i + 0.5) / W, (j + 0.5) / H, noise)
+      for (let i = 0; i < W; i++) sst[j * W + i] = sstAt((i + 0.5) / W, (j + 0.5) / H, noise, sstCenterC)
     }
   }
 
@@ -419,7 +468,7 @@ export function renderSatellite(canvas: DrawableCanvas, { channel, seed }: Satel
       let green = 0
       let blue = 0
 
-      if (needsStorm) evalPixel(u, v, noise, g)
+      if (needsStorm) evalPixel(u, v, noise, hotspots, g)
 
       if (channel === 'ir') {
         const t = irTemperature(cloudHeight(g), g.hot) + (grain() - 0.5) * 1.2
@@ -432,7 +481,7 @@ export function renderSatellite(canvas: DrawableCanvas, { channel, seed }: Satel
         green = WV_RAMP.g(w)
         blue = WV_RAMP.b(w)
       } else if (channel === 'mw') {
-        const s = mwScattering(g)
+        const s = mwScattering(g, innerRingRadius)
         red = MW_RAMP.r(s)
         green = MW_RAMP.g(s)
         blue = MW_RAMP.b(s)
@@ -458,7 +507,7 @@ export function renderSatellite(canvas: DrawableCanvas, { channel, seed }: Satel
       } else if (channel === 'fused' && sst) {
         const h = cloudHeight(g)
         const w = wvValue(g, u, v, noise)
-        const s = mwScattering(g)
+        const s = mwScattering(g, innerRingRadius)
         const t = sst[p]
 
         // Dim ocean temperature as the base layer.

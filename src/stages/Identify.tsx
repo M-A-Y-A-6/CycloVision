@@ -2,7 +2,7 @@ import { motion } from 'framer-motion'
 import { ArrowUp } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useMap } from 'react-leaflet'
-import { LockReticle, ScanLine, TighteningGrid, UncertaintyCircle } from '../components/AnalysisOverlay'
+import { LockReticle } from '../components/AnalysisOverlay'
 import { ContinueButton } from '../components/ContinueButton'
 import { CountUp } from '../components/CountUp'
 import { CoverSquare } from '../components/CoverSquare'
@@ -13,10 +13,10 @@ import { StatusRow } from '../components/StatusRow'
 import { DetectionMarker, StormSwirl } from '../components/StormMapOverlays'
 import { STORM_IMAGE_PX } from '../config/imagery'
 import { IDENTIFY_BEATS, STAGE_SECONDS } from '../config/timings'
-import { storm } from '../data/storm'
 import { cn } from '../lib/cn'
 import { swirlPixels } from '../lib/swirlSize'
 import { useBeats } from '../lib/useBeats'
+import { useCase } from '../lib/useCase'
 import { useStory } from '../store/story'
 import type { StageProps } from './types'
 
@@ -25,35 +25,65 @@ const TOTAL = STAGE_SECONDS.identify
 /** Seconds between two beats of the stage. */
 const between = (from: keyof typeof IDENTIFY_BEATS, to: keyof typeof IDENTIFY_BEATS) =>
   (IDENTIFY_BEATS[to] - IDENTIFY_BEATS[from]) * TOTAL
+/** The bounding-box/label/crosshair overlay is drawn in a 1000x1000 space, matching every other overlay in the app. */
+const VIEW = 1000
 
 /** Sits inside the map and reports where the storm is on screen, in pixels, so the zoom can aim at it. */
-function StormProbe({ onPoint }: { onPoint: (point: { x: number; y: number }) => void }) {
+function StormProbe({ lat, lon, onPoint }: { lat: number; lon: number; onPoint: (point: { x: number; y: number }) => void }) {
   const map = useMap()
   useEffect(() => {
-    const p = map.latLngToContainerPoint([storm.center.latN, storm.center.lonE])
+    const p = map.latLngToContainerPoint([lat, lon])
     onPoint({ x: p.x, y: p.y })
-  }, [map, onPoint])
+  }, [map, lat, lon, onPoint])
   return null
 }
 
-/** Progress ring that fills counter-clockwise from the top. */
-function ConfidenceRing({ fraction, run }: { fraction: number; run: boolean }) {
+/** The bounding box YOLO-NAS draws around the detected cloud mass, from identification.boundingBox. */
+function BoundingBox({ box, show, seconds }: { box: readonly [number, number, number, number]; show: boolean; seconds: number }) {
+  const [x, y, w, h] = box
+  const path = `M ${x * VIEW} ${y * VIEW} L ${(x + w) * VIEW} ${y * VIEW} L ${(x + w) * VIEW} ${(y + h) * VIEW} L ${x * VIEW} ${(y + h) * VIEW} Z`
   return (
-    <svg viewBox="0 0 44 44" className="size-11 shrink-0 rotate-90 -scale-x-100" aria-hidden="true">
-      <circle cx="22" cy="22" r="18" fill="none" stroke="var(--color-line)" strokeWidth="4" />
-      <motion.circle
-        cx="22"
-        cy="22"
-        r="18"
+    <svg viewBox={`0 0 ${VIEW} ${VIEW}`} className="pointer-events-none absolute inset-0 size-full" aria-hidden="true">
+      <motion.path
+        d={path}
         fill="none"
         stroke="var(--color-accent)"
-        strokeWidth="4"
-        strokeLinecap="round"
+        strokeWidth={3.5}
+        strokeLinejoin="round"
+        style={{ filter: 'drop-shadow(0 0 6px rgb(34 211 238 / 0.7))' }}
         initial={false}
-        animate={{ pathLength: run ? fraction : 0 }}
-        transition={{ duration: 1, ease: 'easeOut' }}
+        animate={{ pathLength: show ? 1 : 0, opacity: show ? 1 : 0 }}
+        transition={{ duration: seconds, ease: 'easeInOut' }}
       />
     </svg>
+  )
+}
+
+interface DetectionLabelProps {
+  box: readonly [number, number, number, number]
+  show: boolean
+  confidence: number
+  lat: number
+  lon: number
+}
+
+/** The floating "Cyclone Detected" tag, pinned above the bounding box's top-left corner. */
+function DetectionLabel({ box, show, confidence, lat, lon }: DetectionLabelProps) {
+  const [x, y] = box
+  return (
+    <motion.div
+      className="pointer-events-none absolute -translate-y-[calc(100%+10px)]"
+      style={{ left: `${x * 100}%`, top: `${y * 100}%` }}
+      initial={false}
+      animate={{ opacity: show ? 1 : 0, y: show ? 0 : 6 }}
+      transition={{ duration: 0.5, ease }}
+      aria-hidden={!show}
+    >
+      <span className="num flex items-center gap-1.5 rounded-md border border-accent bg-base/85 px-2.5 py-1.5 text-[11px] leading-none font-semibold whitespace-nowrap text-accent shadow-lg backdrop-blur-sm">
+        <span className="size-1.5 rounded-full bg-accent" />
+        Cyclone Detected &mdash; {confidence}% confidence &mdash; {lat.toFixed(1)}&deg; N, {lon.toFixed(1)}&deg; E
+      </span>
+    </motion.div>
   )
 }
 
@@ -74,14 +104,16 @@ function ReadoutRow({ label, show, children }: { label: string; show: boolean; c
 }
 
 /**
- * Stage 2, Identify. The map zooms into the storm and cross-fades into the fused satellite image; the AI
- * analysis then scans it, tightens a grid, locks a crosshair on the centre and draws an uncertainty circle,
- * while the storm's centre, movement and confidence settle into the info panel, then a Continue button appears.
- * The animation follows STAGE_SECONDS.identify and IDENTIFY_BEATS in config/timings.ts; the story only moves to
- * Classify when the visitor clicks Continue. If the progress tracker jumped straight here because it was
- * already finished, `instant` skips the whole build-up and shows the finished result immediately.
+ * Stage 2, Identify (model: YOLO-NAS). The map zooms into the storm and cross-fades into the fused satellite
+ * image; a bounding box then draws itself around the storm (identification.boundingBox), a "Cyclone Detected"
+ * label settles above it with the confidence and coordinates, and a crosshair locks onto the centre — while
+ * Movement settles into the info panel — then a Continue button appears. The animation follows
+ * STAGE_SECONDS.identify and IDENTIFY_BEATS in config/timings.ts; the story only moves to Classify when the
+ * visitor clicks Continue. If the progress tracker jumped straight here because it was already finished,
+ * `instant` skips the whole build-up and shows the finished result immediately.
  */
 export function Identify({ onDone }: StageProps) {
+  const caseData = useCase()
   const instant = useStory((s) => s.doneStages.identify ?? false)
   const markDone = useStory((s) => s.markDone)
   const b = useBeats(TOTAL, IDENTIFY_BEATS, instant)
@@ -106,10 +138,12 @@ export function Identify({ onDone }: StageProps) {
   }
   const zooming = b.zoom && zoom
   const lockSeconds = between('crosshair', 'lock')
+  const { confidence, centerCoords, boundingBox } = caseData.precomputed.identification
 
   return (
     <StageLayout
       stage="identify"
+      pipelineLabels={['YOLO-NAS — cyclone detection & center localization']}
       visual={
         <div ref={visualRef} className="absolute inset-0">
           {/* Layer 1: the map from the previous stage, zooming in on the storm. */}
@@ -131,13 +165,13 @@ export function Identify({ onDone }: StageProps) {
             }}
           >
             <MonitoringMap className="size-full" showLabel={!b.zoom}>
-              <StormSwirl progress={1} />
-              <DetectionMarker show={!b.zoom} />
-              <StormProbe onPoint={onPoint} />
+              <StormSwirl caseData={caseData} progress={1} />
+              <DetectionMarker caseData={caseData} show={!b.zoom} />
+              <StormProbe lat={caseData.center.lat} lon={caseData.center.lon} onPoint={onPoint} />
             </MonitoringMap>
           </motion.div>
 
-          {/* Layer 2: the fused satellite image with the AI analysis on top, fading in as the zoom ends. */}
+          {/* Layer 2: the fused satellite image with the bounding box, label and crosshair, fading in as the zoom ends. */}
           <motion.div
             className="absolute inset-0"
             initial={false}
@@ -145,45 +179,28 @@ export function Identify({ onDone }: StageProps) {
             transition={{ duration: between('crossfade', 'zoomEnd'), ease: 'easeInOut' }}
           >
             <CoverSquare>
-              <SatelliteCanvas channel="fused" size={STORM_IMAGE_PX} className="size-full" />
-              <TighteningGrid visible={b.grid} tighten={b.tighten} tightenSeconds={between('tighten', 'tightenEnd')} />
-              <UncertaintyCircle show={b.uncertainty} />
-              <LockReticle show={b.crosshair} lockSeconds={lockSeconds} locked={b.lock} instant={instant} />
+              <SatelliteCanvas channel="fused" size={STORM_IMAGE_PX} caseData={caseData} className="size-full" />
+              <BoundingBox box={boundingBox} show={b.box} seconds={between('box', 'boxEnd')} />
+              <DetectionLabel box={boundingBox} show={b.boxEnd} confidence={confidence} lat={centerCoords.lat} lon={centerCoords.lon} />
+              <LockReticle show={b.crosshair} lockSeconds={lockSeconds} locked={b.lock} center={caseData.geometry.center} instant={instant} />
             </CoverSquare>
           </motion.div>
-
-          <ScanLine run={b.scan} seconds={between('scan', 'scanEnd')} instant={instant} />
         </div>
       }
     >
       <div className="space-y-2.5">
-        <ReadoutRow label="Center" show={b.crosshair}>
-          <span className="num">
-            <CountUp from={storm.center.latN - 3.5} to={storm.center.latN} decimals={1} run={b.crosshair} seconds={lockSeconds} />° N
-            <span className="text-muted">,&nbsp;</span>
-            <CountUp from={storm.center.lonE - 3.5} to={storm.center.lonE} decimals={1} run={b.crosshair} seconds={lockSeconds} />° E
-          </span>
-        </ReadoutRow>
-
         <ReadoutRow label="Movement" show={b.movement}>
           <motion.span
             initial={false}
-            animate={{ rotate: b.movement ? storm.movement.headingDeg - 360 : 0 }}
+            animate={{ rotate: b.movement ? caseData.movement.headingDeg - 360 : 0 }}
             transition={{ duration: 0.9, ease: 'easeOut' }}
             className="grid size-9 place-items-center rounded-full border border-line bg-base text-accent"
           >
-            <ArrowUp className="size-5" strokeWidth={2.5} aria-label="pointing north-west" />
+            <ArrowUp className="size-5" strokeWidth={2.5} aria-label={`pointing ${caseData.movement.directionLabel}`} />
           </motion.span>
           <span className="num">
-            {storm.movement.directionLabel} at{' '}
-            <CountUp to={storm.movement.speedKmh} run={b.movement} seconds={0.9} /> km/h
-          </span>
-        </ReadoutRow>
-
-        <ReadoutRow label="Confidence" show={b.confidence}>
-          <ConfidenceRing fraction={storm.identificationConfidencePct / 100} run={b.confidence} />
-          <span className="num">
-            <CountUp to={storm.identificationConfidencePct} run={b.confidence} seconds={1} />%
+            {caseData.movement.directionLabel} at{' '}
+            <CountUp to={caseData.movement.speedKmh} run={b.movement} seconds={0.9} /> km/h
           </span>
         </ReadoutRow>
       </div>

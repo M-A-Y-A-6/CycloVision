@@ -2,7 +2,8 @@ import type { SatelliteChannel } from '../lib/satellite'
 
 /**
  * Pixel sizes of the satellite images the story uses. Screens that share an image must use the same size
- * (the cache is keyed by channel and size), and everything here is drawn ahead of time in the background.
+ * (the cache is keyed by case, channel and size), and everything here is drawn ahead of time in the background,
+ * for whichever case is about to run.
  */
 export const THUMB_PX = 128
 export const SWIRL_IMAGE_PX = 192

@@ -2,17 +2,17 @@ import { motion } from 'framer-motion'
 import { useEffect, useRef } from 'react'
 import { Badge } from '../components/Badge'
 import { ContinueButton } from '../components/ContinueButton'
-import { CountUp } from '../components/CountUp'
 import { EnsembleChart } from '../components/EnsembleChart'
+import { MiniGauge } from '../components/MiniGauge'
 import { SatelliteCanvas } from '../components/SatelliteCanvas'
 import { StageLayout } from '../components/StageLayout'
 import { StatusRow } from '../components/StatusRow'
 import { STORM_IMAGE_PX } from '../config/imagery'
 import { RISK_TONE } from '../config/risk'
 import { PREDICT_BEATS, STAGE_SECONDS } from '../config/timings'
-import { ensemble, riAssessment } from '../data/storm'
-import { cn } from '../lib/cn'
+import { RI_THRESHOLD_KT, riRiskLevel } from '../data/cases'
 import { useBeats } from '../lib/useBeats'
+import { useCase } from '../lib/useCase'
 import { useElementSize } from '../lib/useElementSize'
 import { useStory } from '../store/story'
 import type { StageProps } from './types'
@@ -26,57 +26,87 @@ const between = (from: keyof typeof PREDICT_BEATS, to: keyof typeof PREDICT_BEAT
 /** Where the satellite image ends up: a small thumbnail in the top-left corner of the chart area. */
 const THUMB = { inset: 14, size: 84 }
 
-interface ProbabilityStatProps {
-  label: string
-  value: number
-  paths: number
-  run: boolean
-  seconds: number
-  emphasis?: boolean
-}
-
-/** One rapid-intensification probability: the number counts up, with how many of the 30 paths it comes from. */
-function ProbabilityStat({ label, value, paths, run, seconds, emphasis }: ProbabilityStatProps) {
+/** A small sparkline of riPrediction.trend: the run-up of past readings leading to today's RI probability. */
+function TrendSparkline({ trend, show }: { trend: readonly number[]; show: boolean }) {
+  const w = 220
+  const h = 46
+  const pad = 5
+  const min = Math.min(...trend)
+  const max = Math.max(...trend)
+  const range = Math.max(1, max - min)
+  const points = trend.map((v, i) => {
+    const x = pad + (i / (trend.length - 1)) * (w - pad * 2)
+    const y = h - pad - ((v - min) / range) * (h - pad * 2)
+    return [x, y] as const
+  })
+  const d = 'M ' + points.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join(' L ')
   return (
-    <div>
-      <p className="text-[10px] font-semibold tracking-[0.14em] text-muted uppercase">{label}</p>
-      <p className={cn('num mt-1 leading-none font-semibold', emphasis ? 'short:text-4xl text-5xl text-amber' : 'short:text-2xl text-3xl text-ink')}>
-        <CountUp to={value} run={run} seconds={seconds} />%
-      </p>
-      <p className="mt-1.5 text-xs text-muted">
-        {paths} of {riAssessment.memberCount} paths
-      </p>
-    </div>
+    <svg viewBox={`0 0 ${w} ${h}`} className="w-full" role="img" aria-label="Sparkline of the RI probability's recent trend, rising toward today's figure">
+      <motion.path
+        d={d}
+        fill="none"
+        stroke="var(--color-accent)"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        initial={false}
+        animate={{ pathLength: show ? 1 : 0, opacity: show ? 1 : 0 }}
+        transition={{ duration: 0.9, ease: 'easeOut' }}
+      />
+      {points.map(([x, y], i) => (
+        <motion.circle
+          key={i}
+          cx={x}
+          cy={y}
+          r={i === points.length - 1 ? 3.2 : 2.2}
+          fill="var(--color-accent)"
+          initial={false}
+          animate={{ opacity: show ? 1 : 0, scale: show ? 1 : 0.4 }}
+          style={{ transformBox: 'fill-box', transformOrigin: 'center' }}
+          transition={{ duration: 0.3, delay: show ? 0.14 * i : 0 }}
+        />
+      ))}
+    </svg>
   )
 }
 
 /**
- * Stage 4, Predict RI: the big reveal. The satellite image shrinks to a corner thumbnail and a chart takes over:
- * 30 possible futures draw outward from "now", then the median, the 10-90% band and the +30 kt line; the paths
- * that reach it turn warm. Then the probabilities, risk level and callouts appear, the completion lines tick, and
- * a Continue button appears. The animation follows STAGE_SECONDS.predict and PREDICT_BEATS in config/timings.ts;
- * the story only moves to Result when the visitor clicks Continue. If the progress tracker jumped straight here
- * because it was already finished, `instant` skips the whole build-up and shows the finished chart immediately.
+ * Stage 4, Predict RI: the big reveal (model: TCN + Attention feeding the RI Head). The satellite image
+ * shrinks to a corner thumbnail and the ensemble chart takes over: 30 possible futures draw outward from
+ * "now", then the median, the 10-90% band and the +30 kt line; the paths that reach it turn warm. Then, in
+ * the status column: a small sparkline of the RI probability's recent trend, an RI risk gauge animating from
+ * 0 to the 24h probability, two callouts (expected intensity change, and the probability with its
+ * uncertainty and ensemble size), the risk badge, three completion lines and a Continue button. The
+ * animation follows STAGE_SECONDS.predict and PREDICT_BEATS in config/timings.ts; the story only moves to
+ * the Explain Result stage when the visitor clicks Continue. If the progress tracker jumped straight here
+ * because it was already finished, `instant` skips the whole build-up and shows the finished chart
+ * immediately.
  */
 export function Predict({ onDone }: StageProps) {
+  const caseData = useCase()
+  const { ensemble } = caseData
   const instant = useStory((s) => s.doneStages.predict ?? false)
   const markDone = useStory((s) => s.markDone)
   const b = useBeats(TOTAL, PREDICT_BEATS, instant)
   useEffect(() => {
-    if (b.line4) markDone('predict')
-  }, [b.line4, markDone])
+    if (b.line3) markDone('predict')
+  }, [b.line3, markDone])
 
   const areaRef = useRef<HTMLDivElement>(null)
   const area = useElementSize(areaRef)
 
   const pathSeconds = 0.1 * TOTAL
   const pathStagger = Math.max(0.01, (between('paths', 'median') - pathSeconds) / (ensemble.memberCount - 1))
-  const probability24h = Math.round(riAssessment.probability24hPct)
-  const probability12h = Math.round(riAssessment.probability12hPct)
+  const { probability24h: probability24hRaw, uncertaintyRange, deltaIntensity, ensemblePasses, trend } = caseData.precomputed.riPrediction
+  const probability24h = Math.round(probability24hRaw)
+  const level = riRiskLevel(probability24h)
+  const plusMinus = Math.round((uncertaintyRange.high - uncertaintyRange.low) / 2)
 
   return (
     <StageLayout
       stage="predict"
+      pipelineLabels={['TCN + Attention — temporal evolution']}
+      pipelineHint="RI Head combines deep spatio-temporal features with environmental indicators (SST, shear, OHC)."
       visual={
         <div ref={areaRef} className="absolute inset-0">
           {area && (
@@ -84,6 +114,8 @@ export function Predict({ onDone }: StageProps) {
               <EnsembleChart
                 width={area.w}
                 height={area.h}
+                ensemble={ensemble}
+                thresholdKt={RI_THRESHOLD_KT}
                 axes={b.axes}
                 paths={b.paths}
                 median={b.median}
@@ -111,7 +143,7 @@ export function Predict({ onDone }: StageProps) {
                 }
                 transition={{ duration: 1, ease: [0.5, 0, 0.2, 1] }}
               >
-                <SatelliteCanvas channel="fused" size={STORM_IMAGE_PX} className="size-full object-cover" />
+                <SatelliteCanvas channel="fused" size={STORM_IMAGE_PX} caseData={caseData} className="size-full object-cover" />
               </motion.div>
             </>
           )}
@@ -120,39 +152,56 @@ export function Predict({ onDone }: StageProps) {
     >
       <motion.div
         initial={false}
-        animate={{ opacity: b.results ? 1 : 0, y: b.results ? 0 : 8 }}
-        transition={{ duration: 0.6, ease }}
-        aria-hidden={!b.results}
-        className="short:py-2.5 rounded-xl border border-line bg-panel px-4 py-3.5"
+        animate={{ opacity: b.trend ? 1 : 0, y: b.trend ? 0 : 8 }}
+        transition={{ duration: 0.5, ease }}
+        aria-hidden={!b.trend}
+        className="short:space-y-1.5 short:py-2 space-y-2 rounded-xl border border-line bg-panel px-4 py-3"
       >
-        <div className="grid grid-cols-2 gap-4">
-          <ProbabilityStat
-            label="RI probability · 24 h"
-            value={probability24h}
-            paths={riAssessment.rapidMembers24h}
-            run={b.results}
-            seconds={0.12 * TOTAL}
-            emphasis
-          />
-          <ProbabilityStat
-            label="RI probability · 12 h"
-            value={probability12h}
-            paths={riAssessment.paceMembers12h}
-            run={b.results}
-            seconds={0.1 * TOTAL}
-          />
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-semibold tracking-[0.14em] text-muted uppercase">RI risk · 24 h</p>
+            <p className="mt-0.5 text-[11px] text-muted">RI Head output</p>
+          </div>
+          <motion.span
+            initial={false}
+            animate={{ opacity: b.badge ? 1 : 0, scale: b.badge ? 1 : 0.9 }}
+            transition={{ duration: 0.5, ease }}
+            aria-hidden={!b.badge}
+          >
+            <Badge tone={RISK_TONE[level]} size="lg">
+              {level}
+            </Badge>
+          </motion.span>
         </div>
-        <motion.div
-          initial={false}
-          animate={{ opacity: b.badge ? 1 : 0, scale: b.badge ? 1 : 0.9 }}
-          transition={{ duration: 0.5, ease }}
-          className="short:mt-2 mt-3.5 flex items-center justify-between border-t border-line pt-3"
-        >
-          <span className="text-[10px] font-semibold tracking-[0.14em] text-muted uppercase">Risk level</span>
-          <Badge tone={RISK_TONE[riAssessment.level]} size="lg">
-            {riAssessment.level}
-          </Badge>
-        </motion.div>
+
+        <div className="flex items-center gap-4">
+          <MiniGauge probabilityPct={probability24h} level={level} run={b.gauge} seconds={0.5 * TOTAL} size={68} />
+          <div className="min-w-0 flex-1">
+            <p className="short:mb-0.5 mb-1 text-[10px] font-semibold tracking-[0.14em] text-muted/80 uppercase">Recent trend</p>
+            <TrendSparkline trend={trend} show={b.trend} />
+          </div>
+        </div>
+
+        <div className="short:space-y-0.5 space-y-1 border-t border-line pt-2">
+          <motion.p
+            initial={false}
+            animate={{ opacity: b.deltaCallout ? 1 : 0, y: b.deltaCallout ? 0 : 6 }}
+            transition={{ duration: 0.5, ease }}
+            aria-hidden={!b.deltaCallout}
+            className="num short:text-xs text-sm text-ink"
+          >
+            <span className="font-semibold text-amber">+{deltaIntensity}</span> expected within 24h
+          </motion.p>
+          <motion.p
+            initial={false}
+            animate={{ opacity: b.rangeCallout ? 1 : 0, y: b.rangeCallout ? 0 : 6 }}
+            transition={{ duration: 0.5, ease }}
+            aria-hidden={!b.rangeCallout}
+            className="num short:text-xs text-sm text-muted"
+          >
+            <span className="font-semibold text-ink">{probability24h}%</span> &plusmn; {plusMinus}%, based on {ensemblePasses} ensemble passes
+          </motion.p>
+        </div>
       </motion.div>
 
       <motion.div
@@ -166,8 +215,7 @@ export function Predict({ onDone }: StageProps) {
           [
             ['RI assessment generated', b.line1],
             ['12-24h forecast window', b.line2],
-            ['Probability spread', b.line3],
-            ['Uncertainty band', b.line4],
+            ['Uncertainty band', b.line3],
           ] as const
         ).map(([label, on]) => (
           <motion.div key={label} initial={false} animate={{ opacity: on ? 1 : 0, y: on ? 0 : 6 }} transition={{ duration: 0.6, ease }}>
@@ -176,7 +224,7 @@ export function Predict({ onDone }: StageProps) {
         ))}
       </motion.div>
 
-      <ContinueButton show={b.line4} label="Continue to Result" onClick={onDone} />
+      <ContinueButton show={b.line3} label="Continue to Explain Result" onClick={onDone} />
     </StageLayout>
   )
 }

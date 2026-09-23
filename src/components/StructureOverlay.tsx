@@ -1,14 +1,15 @@
 import { motion } from 'framer-motion'
-import { STORM_GEOMETRY, type Point } from '../lib/satellite'
+import { useMemo } from 'react'
+import type { Point, StormGeometry } from '../lib/satellite'
 
 /**
  * The Dvorak-aligned structural overlay: the three curved-band arcs, the CDO outline and the cloud-system
- * centre, each with a small label. Everything is drawn from STORM_GEOMETRY (normalised 0-1), so it must be
- * placed inside a <CoverSquare> over the fused satellite image; the strokes then lie exactly on the features.
+ * centre, each with a small label. Everything is drawn from the case's own geometry (normalised 0-1), so it
+ * must be placed inside a <CoverSquare> over the fused satellite image; the strokes then lie exactly on the
+ * features. Geometry comes in as a prop since each case has its own eyewall ring and hotspots.
  */
 
 const ease: [number, number, number, number] = [0.4, 0, 0.2, 1]
-const { bands, cdo, center } = STORM_GEOMETRY
 
 // Colours are the design tokens (amber, accent, ink).
 const BAND_COLOR = 'var(--color-amber)'
@@ -19,18 +20,6 @@ const CENTER_COLOR = 'var(--color-ink)'
 const VIEW = 1000
 const toPath = (points: Point[], close = false) =>
   'M' + points.map((p) => `${(p.x * VIEW).toFixed(1)} ${(p.y * VIEW).toFixed(1)}`).join(' L') + (close ? ' Z' : '')
-
-const BAND_PATHS = bands.map((band) => toPath(band))
-const CDO_PATH = toPath(cdo, true)
-
-// Where each label sits and what it points at, in normalised coordinates. Chosen from the geometry to stay
-// clear of the other features and inside the visible part of the (cropped) image.
-const BAND_ANCHOR = bands[0][24] // the strongest arc, on the east side of the storm
-const LABELS = {
-  band: { from: BAND_ANCHOR, at: { x: BAND_ANCHOR.x + 0.105, y: BAND_ANCHOR.y } },
-  cdo: { from: { x: center.x, y: cdo[24].y }, at: { x: center.x, y: cdo[24].y - 0.052 } }, // top of the CDO
-  center: { from: { x: center.x, y: center.y }, at: { x: center.x, y: center.y + 0.112 } },
-}
 
 export interface LabelProps {
   show: boolean
@@ -79,6 +68,7 @@ export function FeatureLabel({ show, text, color, from, at }: LabelProps) {
 }
 
 interface StructureOverlayProps {
+  geometry: StormGeometry
   bands: boolean
   bandsLabel: boolean
   cdo: boolean
@@ -93,11 +83,30 @@ interface StructureOverlayProps {
 }
 
 export function StructureOverlay(props: StructureOverlayProps) {
+  const { bands, cdo, center } = props.geometry
+
+  // Where each label sits and what it points at, in normalised coordinates. Chosen from the geometry to stay
+  // clear of the other features and inside the visible part of the (cropped) image.
+  const derived = useMemo(() => {
+    const bandPaths = bands.map((band) => toPath(band))
+    const cdoPath = toPath(cdo, true)
+    const bandAnchor = bands[0][24] // the strongest arc, on the east side of the storm
+    return {
+      bandPaths,
+      cdoPath,
+      labels: {
+        band: { from: bandAnchor, at: { x: bandAnchor.x + 0.105, y: bandAnchor.y } },
+        cdo: { from: { x: center.x, y: cdo[24].y }, at: { x: center.x, y: cdo[24].y - 0.052 } }, // top of the CDO
+        center: { from: { x: center.x, y: center.y }, at: { x: center.x, y: center.y + 0.112 } },
+      },
+    }
+  }, [bands, cdo, center])
+
   return (
     <>
       <svg viewBox={`0 0 ${VIEW} ${VIEW}`} className="pointer-events-none absolute inset-0 size-full" aria-hidden="true">
         {/* Curved bands: three arcs, drawn one after another. */}
-        {BAND_PATHS.map((d, i) => (
+        {derived.bandPaths.map((d, i) => (
           <motion.path
             key={i}
             d={d}
@@ -114,7 +123,7 @@ export function StructureOverlay(props: StructureOverlayProps) {
 
         {/* Central dense overcast: outline draws round, then the inside takes a faint tint. */}
         <motion.path
-          d={CDO_PATH}
+          d={derived.cdoPath}
           fill={CDO_COLOR}
           stroke={CDO_COLOR}
           strokeWidth={3.5}
@@ -158,9 +167,9 @@ export function StructureOverlay(props: StructureOverlayProps) {
         </svg>
       </motion.div>
 
-      <FeatureLabel show={props.bandsLabel} text="Curved Band" color={BAND_COLOR} {...LABELS.band} />
-      <FeatureLabel show={props.cdoLabel} text="CDO" color={CDO_COLOR} {...LABELS.cdo} />
-      <FeatureLabel show={props.centerLabel} text="Cloud system center" color={CENTER_COLOR} {...LABELS.center} />
+      <FeatureLabel show={props.bandsLabel} text="Curved Band" color={BAND_COLOR} {...derived.labels.band} />
+      <FeatureLabel show={props.cdoLabel} text="CDO" color={CDO_COLOR} {...derived.labels.cdo} />
+      <FeatureLabel show={props.centerLabel} text="Cloud system center" color={CENTER_COLOR} {...derived.labels.center} />
     </>
   )
 }

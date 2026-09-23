@@ -116,6 +116,21 @@
     outline-offset: 3px;
   }
 
+  /* Dashboard's Simulate button is visible but disabled until a case is picked: dim it and drop the glow,
+     rather than the animation implying a livelier state than "not ready yet". */
+  &:disabled {
+    animation: none;
+    filter: grayscale(0.4);
+    opacity: 0.45;
+    cursor: not-allowed;
+    box-shadow: 0 0 0 1px rgb(30 144 255 / 0.3);
+  }
+
+  &:disabled:hover {
+    filter: grayscale(0.4);
+    transform: none;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     animation: none;
     box-shadow:

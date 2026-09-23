@@ -60,7 +60,6 @@ function StepCircle({ step, index, bubbleState, interactive, onClick }: StepButt
  */
 export function ProgressTracker({ stage }: { stage: StoryStage }) {
   const doneStages = useStory((s) => s.doneStages)
-  const resultSeen = useStory((s) => s.resultSeen)
   const view = useStory((s) => s.view)
   const [blocked, setBlocked] = useState<StoryStage | null>(null)
 
@@ -77,9 +76,10 @@ export function ProgressTracker({ stage }: { stage: StoryStage }) {
         {STORY_STEPS.map((step, i) => {
           const isResult = step.stage === 'result'
           const isCurrent = step.stage === stage
-          // Result has no doneStages entry of its own (it is left exactly as it was, per the brief); reuse
-          // resultSeen, which already means precisely "the visitor has moved on from Result at least once".
-          const isDone = isResult ? resultSeen : !!doneStages[step.stage]
+          // Result/Explain Result never gets a doneStages entry (it is left exactly as it was, per the
+          // brief, and Phase 14 removed the only way to navigate back into it once left), so it is simply
+          // "current" while showing and "upcoming" otherwise — never shown as done-and-passed.
+          const isDone = !!doneStages[step.stage]
           const bubbleState: BubbleState = isCurrent ? 'current' : isDone ? 'done' : 'upcoming'
           const isLast = i === STORY_STEPS.length - 1
 

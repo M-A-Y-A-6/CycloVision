@@ -1,11 +1,11 @@
 import { motion } from 'framer-motion'
 import { useMemo, type ReactNode } from 'react'
-import { ensemble, riAssessment } from '../data/storm'
+import type { Ensemble } from '../data/cases'
 
 /**
  * The Predict-stage chart, in custom SVG: the 30 intensity paths of the ensemble over the next 24 hours, the
  * median path, the 10-90% uncertainty band and the dashed +30 kt rapid-intensification line. Everything is
- * drawn from the data in data/storm.ts and revealed piece by piece through the boolean props.
+ * drawn from the case's own `ensemble` prop (data/cases.ts) and revealed piece by piece through the boolean props.
  */
 
 // Animated colours must be literal values: these are the design tokens.
@@ -20,21 +20,9 @@ const HOURS = 24
 const WIND_MIN = 40
 const WIND_MAX = 120
 const MARGIN = { left: 56, right: 46, top: 22, bottom: 52 }
-const START_KT = ensemble.startWindKt
-const RI_LINE_KT = START_KT + riAssessment.thresholdKt
-
-/** Which members reach rapid intensification by hour 24, and each one's place among those (for staggering). */
-const REACHES_RI = ensemble.paths.map((p) => p[HOURS] - START_KT >= riAssessment.thresholdKt)
-const RI_ORDER = REACHES_RI.map((_, i) => REACHES_RI.slice(0, i).filter(Boolean).length)
-/** Cool paths first, warm on top, so the warm ones are never buried. */
-const DRAW_ORDER = ensemble.paths.map((_, i) => i).sort((a, b) => Number(REACHES_RI[a]) - Number(REACHES_RI[b]))
 
 /** The hour the "Uncertainty band" callout points at: inside the forecast window, where the band is wide. */
 const BAND_LABEL_HOUR = 15
-
-const FINAL = ensemble.paths.map((p) => p[HOURS])
-const FINAL_MIN = Math.min(...FINAL)
-const FINAL_MAX = Math.max(...FINAL)
 
 type Pt = readonly [number, number]
 
@@ -87,6 +75,10 @@ function Callout({ show, x, y, text, color }: CalloutProps) {
 interface EnsembleChartProps {
   width: number
   height: number
+  /** The case's own 30-member ensemble. */
+  ensemble: Ensemble
+  /** kt gain over 24h that counts as rapid intensification (the case's RI_THRESHOLD_KT). */
+  thresholdKt: number
   /** Frame: axes, grid, the 12h and 24h markers and the forecast window. */
   axes: boolean
   paths: boolean
@@ -107,7 +99,20 @@ interface EnsembleChartProps {
 }
 
 export function EnsembleChart(props: EnsembleChartProps): ReactNode {
-  const { width, height } = props
+  const { width, height, ensemble, thresholdKt } = props
+
+  const startKt = ensemble.startWindKt
+  const riLineKt = startKt + thresholdKt
+
+  const derived = useMemo(() => {
+    /** Which members reach rapid intensification by hour 24, and each one's place among those (for staggering). */
+    const reachesRi = ensemble.paths.map((p) => p[HOURS] - startKt >= thresholdKt)
+    const riOrder = reachesRi.map((_, i) => reachesRi.slice(0, i).filter(Boolean).length)
+    /** Cool paths first, warm on top, so the warm ones are never buried. */
+    const drawOrder = ensemble.paths.map((_, i) => i).sort((a, b) => Number(reachesRi[a]) - Number(reachesRi[b]))
+    const final = ensemble.paths.map((p) => p[HOURS])
+    return { reachesRi, riOrder, drawOrder, finalMin: Math.min(...final), finalMax: Math.max(...final) }
+  }, [ensemble, startKt, thresholdKt])
 
   const g = useMemo(() => {
     const left = MARGIN.left
@@ -131,7 +136,7 @@ export function EnsembleChart(props: EnsembleChartProps): ReactNode {
       medianD: line(at(ensemble.medianKt)),
       bandD: `M ${upper[0][0].toFixed(1)} ${upper[0][1].toFixed(1)}${curve(upper)} L ${lower[HOURS][0].toFixed(1)} ${lower[HOURS][1].toFixed(1)}${curve([...lower].reverse())} Z`,
     }
-  }, [width, height])
+  }, [width, height, ensemble])
 
   const { left, right, top, bottom, x, y } = g
   /** Height of the top strip, above the highest path, where the labels sit. */
@@ -196,9 +201,9 @@ export function EnsembleChart(props: EnsembleChartProps): ReactNode {
         />
 
         {/* The 30 possible futures, each drawn outward from "now". Cool blue; the ones reaching RI turn warm. */}
-        {DRAW_ORDER.map((i) => {
-          const warm = props.warm && REACHES_RI[i]
-          const recolour = { duration: 0.6, delay: RI_ORDER[i] * props.warmStagger }
+        {derived.drawOrder.map((i) => {
+          const warm = props.warm && derived.reachesRi[i]
+          const recolour = { duration: 0.6, delay: derived.riOrder[i] * props.warmStagger }
           return (
             <motion.path
               key={i}
@@ -220,8 +225,8 @@ export function EnsembleChart(props: EnsembleChartProps): ReactNode {
         {/* Rapid-intensification threshold: +30 kt above the current wind. */}
         <motion.line
           x1={left}
-          y1={y(RI_LINE_KT)}
-          y2={y(RI_LINE_KT)}
+          y1={y(riLineKt)}
+          y2={y(riLineKt)}
           stroke={AMBER}
           strokeWidth={2}
           strokeDasharray="9 6"
@@ -230,12 +235,12 @@ export function EnsembleChart(props: EnsembleChartProps): ReactNode {
           transition={{ x2: { duration: props.riLineSeconds, ease: 'easeInOut' }, opacity: { duration: 0.2 } }}
         />
         <motion.g initial={false} animate={{ opacity: props.riLine ? 1 : 0 }} transition={{ duration: 0.5, delay: props.riLineSeconds * 0.6 }}>
-          <text x={left - 10} y={y(RI_LINE_KT) + 4} textAnchor="end" className="num" fontSize={11} fontWeight={700} fill={AMBER}>
-            {RI_LINE_KT}
+          <text x={left - 10} y={y(riLineKt) + 4} textAnchor="end" className="num" fontSize={11} fontWeight={700} fill={AMBER}>
+            {riLineKt}
           </text>
           <text
             x={left + 8}
-            y={y(RI_LINE_KT) - 9}
+            y={y(riLineKt) - 9}
             fontSize={12}
             fontWeight={700}
             fill={AMBER}
@@ -280,7 +285,7 @@ export function EnsembleChart(props: EnsembleChartProps): ReactNode {
         {/* "Now": where every future starts. */}
         <motion.circle
           cx={x(0)}
-          cy={y(START_KT)}
+          cy={y(startKt)}
           r={5}
           fill={ACCENT}
           stroke={BASE}
@@ -292,8 +297,8 @@ export function EnsembleChart(props: EnsembleChartProps): ReactNode {
 
         {/* Probability spread: how far apart the 30 outcomes end up at 24 hours. */}
         <motion.g initial={false} animate={{ opacity: props.spreadLabel ? 1 : 0 }} transition={{ duration: 0.5 }} stroke={INK} strokeOpacity={0.85} strokeWidth={1.8} fill="none" strokeLinecap="round">
-          <path d={`M ${right + 8} ${y(FINAL_MAX)} H ${right + 14} V ${y(FINAL_MIN)} H ${right + 8}`} />
-          <line x1={right + 14} x2={right + 14} y1={y(FINAL_MAX)} y2={callY + 12} />
+          <path d={`M ${right + 8} ${y(derived.finalMax)} H ${right + 14} V ${y(derived.finalMin)} H ${right + 8}`} />
+          <line x1={right + 14} x2={right + 14} y1={y(derived.finalMax)} y2={callY + 12} />
         </motion.g>
 
         {/* Leader from the uncertainty-band label down to the top edge of the band, where it is wide. */}

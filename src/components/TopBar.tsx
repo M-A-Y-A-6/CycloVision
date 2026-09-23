@@ -1,22 +1,34 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { FlaskConical, RotateCcw } from 'lucide-react'
-import { SYNTHETIC_CHIP_LABEL } from '../config/app'
+import { RotateCcw } from 'lucide-react'
+import { NavLink, useNavigate } from 'react-router-dom'
 import { STAGE_MOTION } from '../config/timings'
+import { cn } from '../lib/cn'
 import { useStory } from '../store/story'
-import { Badge } from './Badge'
 import { CycloneIcon } from './CycloneIcon'
 
+const NAV_LINKS: ReadonlyArray<{ to: string; label: string }> = [
+  { to: '/', label: 'Dashboard' },
+  { to: '/about', label: 'About' },
+]
+
 /**
- * Always-visible top bar: logo + name on the left; on the right, a small Replay button (only on the Result and
- * Explain screens) and the "Synthetic demo data" chip.
+ * Always-visible top bar: logo + name on the left, the persistent nav (Dashboard, About) in the middle; on
+ * the right, a small Replay button (once the story has reached its last stage, "Explain Result" — this
+ * stays true on "/results" too, since that page never changes the store's `stage`).
  */
 export function TopBar() {
   const stage = useStory((s) => s.stage)
   const reset = useStory((s) => s.reset)
-  const canReplay = stage === 'result' || stage === 'explain'
+  const navigate = useNavigate()
+  const canReplay = stage === 'result'
+
+  const handleReplay = () => {
+    reset()
+    navigate('/')
+  }
 
   return (
-    <header className="sticky top-0 z-50 flex h-14 items-center justify-between border-b border-line bg-base/85 px-4 backdrop-blur sm:px-6">
+    <header className="sticky top-0 z-50 flex h-14 items-center justify-between gap-4 border-b border-line bg-base/85 px-4 backdrop-blur sm:px-6">
       <div className="flex items-center gap-2.5">
         <span className="grid size-8 place-items-center rounded-lg border border-primary/30 bg-primary/10 text-accent">
           <CycloneIcon className="size-5" />
@@ -26,13 +38,31 @@ export function TopBar() {
         </span>
       </div>
 
+      <nav aria-label="Main" className="hidden items-center gap-1 sm:flex">
+        {NAV_LINKS.map((link) => (
+          <NavLink
+            key={link.to}
+            to={link.to}
+            end={link.to === '/'}
+            className={({ isActive }) =>
+              cn(
+                'rounded-full px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent',
+                isActive ? 'bg-primary/10 text-accent' : 'text-muted hover:text-ink',
+              )
+            }
+          >
+            {link.label}
+          </NavLink>
+        ))}
+      </nav>
+
       <div className="flex items-center gap-3">
         <AnimatePresence>
           {canReplay && (
             <motion.button
               key="replay"
               type="button"
-              onClick={reset}
+              onClick={handleReplay}
               aria-label="Replay the demo from the start"
               // The story moves on to Result while Predict is still fading out, so wait one fade before
               // appearing: the button then arrives together with the Result screen. It leaves quickly.
@@ -47,11 +77,6 @@ export function TopBar() {
             </motion.button>
           )}
         </AnimatePresence>
-
-        <Badge tone="amber">
-          <FlaskConical className="size-3.5" aria-hidden="true" />
-          {SYNTHETIC_CHIP_LABEL}
-        </Badge>
       </div>
     </header>
   )
